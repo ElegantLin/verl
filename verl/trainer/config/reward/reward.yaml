@@ -66,3 +66,46 @@ sandbox_fusion:
   max_concurrent: 64
   # Max memory limit for each sandbox process in MB
   memory_limit_mb: 1024
+
+# Optional algorithm-specific reward settings.
+# Examples:
+# - reward.reward_manager.name=hero
+# - reward.reward_manager.name=hybrid_eif with precomputed aux tau samples (evaluation only)
+# - reward.reward_manager.name=hybrid_eif_online for online generative aux/tau reward (training)
+reward_kwargs:
+  hero:
+    alpha: 0.1
+    beta: 0.1
+    eps: 1e-6
+    w_min: 0.4
+    w_max: 3.0
+    k: 6.0
+    sigma_ema: 0.9
+  hybrid_eif:
+    # Read precomputed tau samples from DataProto.batch or DataProto.non_tensor_batch.
+    # NOTE: This mode is only valid for evaluation (fixed y_i). For training, use hybrid_eif_online.
+    aux_tau_key: aux_tau_values
+  hybrid_eif_online:
+    # Number of auxiliary samples per response (M+1), including the control sample.
+    num_aux_samples: 4
+    # If online scoring fails for a sample, fall back to phi instead of aborting training.
+    fail_open_to_phi: true
+    # Max concurrent requests for auxiliary reward scoring.
+    aux_concurrency: 32
+    # Max concurrent requests for tau_LLM calls.
+    tau_concurrency: 128
+    # Auxiliary reward model (r_ij generator): Qwen/Qwen2.5-7B-Instruct via OpenAI-compatible API.
+    aux_model: Qwen/Qwen2.5-7B-Instruct
+    aux_base_url: http://localhost:8000/v1
+    aux_api_key_env: OPENAI_API_KEY
+    aux_temperature: 1.0
+    aux_max_tokens: 16
+    aux_timeout: 300.0
+    # Tau LLM (tau_LLM): defaults to the same 7B model/endpoint as aux for easy vanilla checks.
+    # For full-scale experiments, override to Qwen/Qwen2.5-32B-Instruct on a separate endpoint.
+    tau_model: Qwen/Qwen2.5-7B-Instruct
+    tau_base_url: http://localhost:8000/v1
+    tau_api_key_env: OPENAI_API_KEY
+    tau_temperature: 0.0
+    tau_max_tokens: 16
+    tau_timeout: 300.0

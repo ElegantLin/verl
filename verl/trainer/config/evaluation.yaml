@@ -4,6 +4,9 @@ data:
   response_key: responses
   data_source_key: data_source
   reward_model_key: reward_model
+  # Optional column for one-step EIF estimator. Each row should be a list of
+  # tau values with length M+1: [tau(x, y, r_1), tau(x, y, r_2), ..., tau(x, y, r_{M+1})].
+  aux_tau_key: null
 
 custom_reward_function:
   path: null
@@ -13,3 +16,8 @@ ray_kwargs:
   ray_init:
     num_cpus: null # `None` means using all CPUs, which might cause hang if limited in systems like SLURM. Please set to a number allowed then.
   timeline_json_file: null
+
+one_step_eif:
+  enable: false
+  # If `responses` is a list, use this response as the primary y_i for phi_i and EIF aggregation.
+  primary_response_index: 0

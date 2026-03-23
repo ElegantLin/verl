@@ -136,6 +136,8 @@ The ``RewardManager`` maintains a reward function and defines its computation lo
 
 - **naive**: The simplest implementation.
 - **dapo**: DAPO implementation with an overlong reward penalty.
+- **hero**: HERO hybrid reward implementation with verifier+RM signals and batch postprocessing.
+- **hybrid_eif**: One-step EIF reward using verifier-side ``phi`` plus precomputed auxiliary tau samples.
 - **limit**: Restricts the concurrency of the reward function, useful when external API calls are rate-limited.
 - **remote**: Runs in a separate process, effective for CPU-intensive tasks such as ``Math-Verify``.
 
@@ -300,4 +302,3 @@ This design allows us to expose a single unified router address to user-defined 
          self.resource_pool = resource_pool
          self._initialize_llm_servers()
          self._initialize_router()
-

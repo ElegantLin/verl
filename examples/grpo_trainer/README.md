@@ -65,6 +65,9 @@ Qwen2.5 GRPO training log and commands: [link](https://github.com/eric-haibin-li
 
 ```bash
 bash examples/grpo_trainer/run_qwen3-8b.sh
+bash examples/grpo_trainer/run_qwen3_4b_hero.sh
+bash examples/grpo_trainer/run_qwen3_4b_hero_from_hf.sh
+bash examples/grpo_trainer/run_qwen3_4b_hybrid_eif_online.sh
 ```
 
 For more reference performance, please see https://verl.readthedocs.io/en/latest/algo/baseline.html

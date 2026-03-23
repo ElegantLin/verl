@@ -70,6 +70,8 @@ verl is fast with:
 
    algo/ppo.md
    algo/grpo.md
+   algo/hero.md
+   algo/hybrid_reward_eif.md
    algo/collabllm.md
    algo/dapo.md
    algo/spin.md

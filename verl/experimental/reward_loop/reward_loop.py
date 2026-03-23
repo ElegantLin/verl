@@ -15,6 +15,7 @@
 import asyncio
 import logging
 import os
+from typing import Any
 
 import aiohttp
 import numpy as np
@@ -28,11 +29,57 @@ from verl.single_controller.ray.base import RayResourcePool
 from verl.trainer.ppo.reward import load_reward_manager
 from verl.utils import hf_tokenizer
 from verl.utils.fs import copy_to_local
+from verl.utils.reward_score.hero import apply_hero_shaping
+from verl.utils.reward_score.hybrid_reward_eif import (
+    AuxRewardScorer,
+    TauLLMScorer,
+    compute_response_online_eif,
+    extract_question_text,
+)
+from verl.utils.reward_score.one_step_eif import compute_one_step_scores
 
 from .reward_model import RewardModelManager
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+def _normalize_hybrid_eif_tau_row(value, *, aux_tau_key: str) -> np.ndarray:
+    if isinstance(value, torch.Tensor):
+        tau_row = value.detach().cpu().numpy()
+    else:
+        if hasattr(value, "tolist") and not isinstance(value, str):
+            value = value.tolist()
+        tau_row = np.asarray(value, dtype=np.float64)
+
+    if tau_row.ndim != 1:
+        raise ValueError(f"`{aux_tau_key}` must contain 1D tau rows, but got shape={tau_row.shape}.")
+    if tau_row.shape[0] < 2:
+        raise ValueError(f"`{aux_tau_key}` must contain at least 2 tau values per sample, got {tau_row.shape[0]}.")
+    return tau_row.astype(np.float64, copy=False)
+
+
+def _load_hybrid_eif_tau_samples(data: DataProto, *, aux_tau_key: str) -> np.ndarray:
+    if data.batch is not None and aux_tau_key in data.batch.keys():
+        tau_samples = data.batch[aux_tau_key]
+        if isinstance(tau_samples, torch.Tensor):
+            tau_samples = tau_samples.detach().cpu().numpy()
+        tau_samples = np.asarray(tau_samples, dtype=np.float64)
+        if tau_samples.ndim != 2:
+            raise ValueError(f"`{aux_tau_key}` in batch must be 2D with shape [N, M+1], got {tau_samples.shape}.")
+        if tau_samples.shape[1] < 2:
+            raise ValueError(f"`{aux_tau_key}` in batch must contain at least 2 tau values, got {tau_samples.shape[1]}.")
+        return tau_samples
+
+    if data.non_tensor_batch is not None and aux_tau_key in data.non_tensor_batch:
+        tau_rows = [
+            _normalize_hybrid_eif_tau_row(value, aux_tau_key=aux_tau_key) for value in data.non_tensor_batch[aux_tau_key]
+        ]
+        return np.stack(tau_rows, axis=0)
+
+    raise KeyError(
+        f"`reward.reward_manager.name=hybrid_eif` requires `{aux_tau_key}` in batch or non_tensor_batch."
+    )
 
 
 def migrate_legacy_reward_impl(config):
@@ -139,6 +186,15 @@ class RewardLoopWorker:
 
     async def compute_score(self, data: DataProto) -> dict:
         assert len(data) == 1, "RewardLoopWorker only support single data item"
+        if self.config.reward.reward_manager.name == "hero":
+            return await self.compute_score_hero(data)
+        if self.config.reward.reward_manager.name == "hybrid_eif":
+            # hybrid_eif uses precomputed tau samples from the batch, so the worker only computes phi.
+            return await self.reward_manager.run_single(data)
+        if self.config.reward.reward_manager.name == "hybrid_eif_online":
+            # hybrid_eif_online computes verifier-side phi in workers and applies online tau aggregation in the manager.
+            return await self.reward_manager.run_single(data)
+
         if self.config.reward.custom_reward_function.path is not None:
             # directly use user-customized reward function
             return await self.reward_manager.run_single(data)
@@ -149,6 +205,24 @@ class RewardLoopWorker:
                 return await self.compute_score_disrm(data)
             else:
                 return await self.reward_manager.run_single(data)
+
+    async def compute_score_hero(self, data: DataProto) -> dict:
+        """Compute HERO inputs: verifier-side score + dense RM score."""
+        hero_output = await self.reward_manager.run_single(data)
+        reward_extra_info = dict(hero_output.get("reward_extra_info", {}))
+        rule_score = float(hero_output.get("reward_score", 0.0))
+
+        # fallback to rule score when RM is not enabled
+        rm_score = rule_score
+        if self.config.reward.reward_model.enable:
+            rm_result = await self.compute_score_disrm(data)
+            rm_score = float(rm_result["reward_score"])
+
+        reward_extra_info["hero_rule_score"] = rule_score
+        reward_extra_info["hero_rm_score"] = rm_score
+        # Keep acc for pass@k/val metric aggregation.
+        reward_extra_info.setdefault("acc", rule_score)
+        return {"reward_score": rule_score, "reward_extra_info": reward_extra_info}
 
     async def _post_request(self, payload: dict, endpoint: str, max_retries: int = 16):
         url = f"http://{self.reward_router_address}/{endpoint}"
@@ -234,7 +308,7 @@ class RewardLoopWorker:
             payloads = {
                 "model": model_name,
                 "input": disrm_prompt,
-                "use_activation": False,
+                "activation": False,
             }
             output = await self._post_request(payloads, "classify")
             rm_score = output["data"][-1]["probs"][-1]
@@ -276,6 +350,10 @@ class RewardLoopManager:
 
     def __init__(self, config: DictConfig, rm_resource_pool: RayResourcePool = None):
         self.config = config
+        self._hero_sigma_bar: float | None = None
+        self._hybrid_eif_online_input_tokenizer = None
+        self._hybrid_eif_online_aux_scorer: AuxRewardScorer | None = None
+        self._hybrid_eif_online_tau_scorer: TauLLMScorer | None = None
         if self.config.reward.reward_model.enable:
             self.reward_model_manager = RewardModelManager(config.reward.reward_model, rm_resource_pool)
             self.reward_router_address = self.reward_model_manager.get_router_address()
@@ -305,6 +383,145 @@ class RewardLoopManager:
                 ).remote(self.config, self.reward_router_address)
             )
 
+    def _init_hybrid_eif_online_components(self):
+        if self._hybrid_eif_online_input_tokenizer is None:
+            input_tokenizer_local_path = copy_to_local(self.config.actor_rollout_ref.model.path)
+            self._hybrid_eif_online_input_tokenizer = hf_tokenizer(input_tokenizer_local_path, trust_remote_code=True)
+
+        cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif_online", {})
+        if self._hybrid_eif_online_aux_scorer is None:
+            self._hybrid_eif_online_aux_scorer = AuxRewardScorer(
+                model=str(cfg.get("aux_model", "Qwen/Qwen2.5-7B-Instruct")),
+                base_url=str(cfg.get("aux_base_url", "http://localhost:8000/v1")),
+                api_key_env=str(cfg.get("aux_api_key_env", "OPENAI_API_KEY")),
+                temperature=float(cfg.get("aux_temperature", 1.0)),
+                max_tokens=int(cfg.get("aux_max_tokens", 16)),
+                timeout=float(cfg.get("aux_timeout", 300.0)),
+            )
+
+        if self._hybrid_eif_online_tau_scorer is None:
+            self._hybrid_eif_online_tau_scorer = TauLLMScorer(
+                model=str(cfg.get("tau_model", "Qwen/Qwen2.5-7B-Instruct")),
+                base_url=str(cfg.get("tau_base_url", "http://localhost:8000/v1")),
+                api_key_env=str(cfg.get("tau_api_key_env", "OPENAI_API_KEY")),
+                temperature=float(cfg.get("tau_temperature", 0.0)),
+                max_tokens=int(cfg.get("tau_max_tokens", 16)),
+                timeout=float(cfg.get("tau_timeout", 300.0)),
+            )
+
+    def _decode_response_texts(self, data: DataProto) -> list[str]:
+        self._init_hybrid_eif_online_components()
+        tokenizer = self._hybrid_eif_online_input_tokenizer
+        assert tokenizer is not None
+
+        prompt_length = data.batch["prompts"].size(1)
+        response_ids = data.batch["responses"]
+        valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(dim=1)
+
+        decoded = []
+        for i in range(len(data)):
+            length = int(valid_response_length[i].item())
+            decoded.append(tokenizer.decode(response_ids[i, :length], skip_special_tokens=True))
+        return decoded
+
+    def _apply_hybrid_eif_online(self, data: DataProto, reward_extra_infos: list[dict], scores: list[float]) -> list[float]:
+        self._init_hybrid_eif_online_components()
+        cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif_online", {})
+        fail_open_to_phi = bool(cfg.get("fail_open_to_phi", True))
+        num_aux_samples = int(cfg.get("num_aux_samples", 2))
+        if num_aux_samples < 2:
+            raise ValueError(f"`hybrid_eif_online.num_aux_samples` must be >= 2, got {num_aux_samples}.")
+        aux_concurrency = int(cfg.get("aux_concurrency", 32))
+        tau_concurrency = int(cfg.get("tau_concurrency", 128))
+
+        decoded_responses = self._decode_response_texts(data)
+        raw_prompts = data.non_tensor_batch.get("raw_prompt", np.array([None] * len(data), dtype=object))
+        extra_infos = data.non_tensor_batch.get("extra_info", np.array([None] * len(data), dtype=object))
+
+        aux_semaphore = asyncio.Semaphore(aux_concurrency) if aux_concurrency > 0 else None
+        tau_semaphore = asyncio.Semaphore(tau_concurrency) if tau_concurrency > 0 else None
+
+        aux_scorer = self._hybrid_eif_online_aux_scorer
+        tau_scorer = self._hybrid_eif_online_tau_scorer
+        assert aux_scorer is not None and tau_scorer is not None
+
+        async def _score_row(sample_idx: int, *, aux_session, tau_session) -> dict[str, Any]:
+            try:
+                question = extract_question_text(raw_prompts[sample_idx], extra_info=extra_infos[sample_idx])
+                result = await compute_response_online_eif(
+                    question=question,
+                    response=decoded_responses[sample_idx],
+                    phi_score=float(scores[sample_idx]),
+                    aux_scorer=aux_scorer,
+                    tau_scorer=tau_scorer,
+                    raw_prompt=raw_prompts[sample_idx],
+                    num_aux_samples=num_aux_samples,
+                    aux_session=aux_session,
+                    tau_session=tau_session,
+                    aux_semaphore=aux_semaphore,
+                    tau_semaphore=tau_semaphore,
+                )
+                return {"ok": True, "result": result}
+            except Exception as exc:  # pragma: no cover - exercised by integration paths.
+                return {"ok": False, "error": exc}
+
+        async def _run_row_scoring() -> list[dict[str, Any]]:
+            aux_timeout = aiohttp.ClientTimeout(total=aux_scorer.timeout)
+            tau_timeout = aiohttp.ClientTimeout(total=tau_scorer.timeout)
+            aux_connector = aiohttp.TCPConnector(limit=0)
+            tau_connector = aiohttp.TCPConnector(limit=0)
+            async with (
+                aiohttp.ClientSession(timeout=aux_timeout, connector=aux_connector) as aux_session,
+                aiohttp.ClientSession(timeout=tau_timeout, connector=tau_connector) as tau_session,
+            ):
+                tasks = [
+                    _score_row(sample_idx, aux_session=aux_session, tau_session=tau_session)
+                    for sample_idx in range(len(data))
+                ]
+                return list(await asyncio.gather(*tasks))
+
+        row_results = asyncio.run(_run_row_scoring())
+
+        final_scores = np.asarray(scores, dtype=np.float64)
+        for sample_idx, result in enumerate(row_results):
+            try:
+                if not result["ok"]:
+                    raise result["error"]
+
+                row_result = result["result"]
+                final_scores[sample_idx] = row_result["score"]
+                diagnostics = row_result["diagnostics"]
+                tau_samples = row_result["tau_samples"]
+                aux_rewards = row_result["aux_rewards"]
+
+                info = reward_extra_infos[sample_idx]
+                phi_score = float(diagnostics["phi"])
+                info["hybrid_eif_online_phi"] = phi_score
+                info["hybrid_eif_online_tau_control"] = float(diagnostics["tau_control"])
+                info["hybrid_eif_online_tau_mc_mean"] = float(diagnostics["tau_mc_mean"])
+                info["hybrid_eif_online_num_aux_samples"] = int(diagnostics["num_aux_samples"])
+                info["hybrid_eif_online_primary_aux_reward"] = float(aux_rewards[0])
+                info["hybrid_eif_online_aux_reward_samples"] = tuple(float(x) for x in aux_rewards.tolist())
+                info["hybrid_eif_online_tau_samples"] = tuple(float(x) for x in tau_samples.tolist())
+                info["hybrid_eif_online_final_score"] = float(final_scores[sample_idx])
+                info["hybrid_eif_online_fallback"] = 0
+                info["hybrid_eif_online_error"] = None
+                info.setdefault("acc", phi_score)
+            except Exception as exc:
+                if not fail_open_to_phi:
+                    raise
+                logger.warning("hybrid_eif_online failed for sample_idx=%s: %s. Falling back to phi.", sample_idx, exc)
+                phi_score = float(scores[sample_idx])
+                final_scores[sample_idx] = phi_score
+                info = reward_extra_infos[sample_idx]
+                info["hybrid_eif_online_phi"] = phi_score
+                info["hybrid_eif_online_final_score"] = phi_score
+                info["hybrid_eif_online_fallback"] = 1
+                info["hybrid_eif_online_error"] = str(exc)
+                info.setdefault("acc", phi_score)
+
+        return final_scores.tolist()
+
     def compute_rm_score(self, data: DataProto) -> DataProto:
         if self.reward_model_manager is not None:
             self.reward_model_manager.wake_up()
@@ -318,8 +535,67 @@ class RewardLoopManager:
         )
         outputs_flat = [item for sublist in outputs for item in sublist]
 
+        reward_extra_infos = [output.get("reward_extra_info", {}) for output in outputs_flat]
         # compute rm score
-        scores = [item["reward_score"] for item in outputs_flat]
+        scores = [float(item["reward_score"]) for item in outputs_flat]
+
+        if self.config.reward.reward_manager.name == "hero":
+            hero_cfg = self.config.reward.get("reward_kwargs", {}).get("hero", {})
+            rule_scores = np.asarray(
+                [info.get("hero_rule_score", score) for info, score in zip(reward_extra_infos, scores, strict=True)],
+                dtype=np.float32,
+            )
+            dense_scores = np.asarray(
+                [info.get("hero_rm_score", score) for info, score in zip(reward_extra_infos, scores, strict=True)],
+                dtype=np.float32,
+            )
+            if "uid" in data.non_tensor_batch:
+                uids = np.asarray(data.non_tensor_batch["uid"], dtype=object)
+            else:
+                # Fallback: each sample forms its own group when uid is unavailable.
+                uids = np.asarray([f"sample_{i}" for i in range(len(scores))], dtype=object)
+            hero_scores, hero_diag, self._hero_sigma_bar = apply_hero_shaping(
+                rule_scores=rule_scores,
+                rm_scores=dense_scores,
+                uids=uids,
+                alpha=float(hero_cfg.get("alpha", 0.1)),
+                beta=float(hero_cfg.get("beta", 0.1)),
+                eps=float(hero_cfg.get("eps", 1e-6)),
+                w_min=float(hero_cfg.get("w_min", 0.4)),
+                w_max=float(hero_cfg.get("w_max", 3.0)),
+                k=float(hero_cfg.get("k", 6.0)),
+                sigma_bar=self._hero_sigma_bar,
+                sigma_ema=float(hero_cfg.get("sigma_ema", 0.9)),
+            )
+            scores = hero_scores.tolist()
+            for i, info in enumerate(reward_extra_infos):
+                info["hero_rule_score"] = float(rule_scores[i])
+                info["hero_rm_score"] = float(dense_scores[i])
+                info["hero_stratified_score"] = float(hero_diag["stratified_reward"][i])
+                info["hero_difficulty_weight"] = float(hero_diag["difficulty_weight"][i])
+                info["hero_group_sigma"] = float(hero_diag["group_sigma"][i])
+                info["hero_sigma_bar"] = float(self._hero_sigma_bar)
+                info["hero_final_score"] = float(scores[i])
+                info.setdefault("acc", float(rule_scores[i]))
+        elif self.config.reward.reward_manager.name == "hybrid_eif":
+            hybrid_eif_cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif", {})
+            aux_tau_key = str(hybrid_eif_cfg.get("aux_tau_key", "aux_tau_values"))
+            phi_scores = np.asarray(scores, dtype=np.float64)
+            tau_samples = _load_hybrid_eif_tau_samples(data, aux_tau_key=aux_tau_key)
+            tau_mc_mean = np.mean(tau_samples[:, 1:], axis=1)
+            eif_scores = compute_one_step_scores(phi_scores, tau_samples)
+            scores = eif_scores.tolist()
+
+            for i, info in enumerate(reward_extra_infos):
+                info["hybrid_eif_phi"] = float(phi_scores[i])
+                info["hybrid_eif_tau_control"] = float(tau_samples[i, 0])
+                info["hybrid_eif_tau_mc_mean"] = float(tau_mc_mean[i])
+                info["hybrid_eif_num_aux_samples"] = int(tau_samples.shape[1] - 1)
+                info["hybrid_eif_final_score"] = float(scores[i])
+                info.setdefault("acc", float(phi_scores[i]))
+        elif self.config.reward.reward_manager.name == "hybrid_eif_online":
+            scores = self._apply_hybrid_eif_online(data, reward_extra_infos, scores)
+
         prompt_length = data.batch["prompts"].size(1)
         valid_response_length = data.batch["attention_mask"][:, prompt_length:].sum(dim=1)
         rm_scores = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
@@ -328,11 +604,10 @@ class RewardLoopManager:
         )
         batch = TensorDict({"rm_scores": rm_scores}, batch_size=len(data))
 
-        reward_extra_infos = [output.get("reward_extra_info", {}) for output in outputs_flat]
-        reward_extra_keys = list(reward_extra_infos[0].keys())
+        reward_extra_keys = sorted(set().union(*(info.keys() for info in reward_extra_infos)))
         non_tensor_batch = {}
         for key in reward_extra_keys:
-            non_tensor_batch[key] = np.array([info[key] for info in reward_extra_infos])
+            non_tensor_batch[key] = np.array([info.get(key, None) for info in reward_extra_infos], dtype=object)
 
         if self.reward_model_manager is not None:
             self.reward_model_manager.sleep()
