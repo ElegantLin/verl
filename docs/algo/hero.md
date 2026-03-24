@@ -1,8 +1,8 @@
 # HERO: Hybrid Ensemble Reward Optimization
 
-Last updated: 03/03/2026.
+Last updated: 03/23/2026.
 
-This page documents a `verl` implementation of **HERO** from:
+This page documents a `verl` reproduction path for **HERO** from:
 - *Hybrid Reinforcement: When Reward Is Sparse, It's Better to Be Dense* (arXiv:2510.07242v1)
 
 ## Overview
@@ -13,91 +13,94 @@ HERO combines:
 
 and applies two shaping steps per prompt group (`uid`):
 
-1. **Stratified normalization** (paper Eq. 3): normalize RM scores *within* verifier strata (`rule=0` and `rule=1`) and map them to bounded intervals.
+1. **Stratified normalization** (paper Eq. 3): normalize RM scores within verifier strata (`rule=0` and `rule=1`) and map them to bounded intervals.
 2. **Variance-aware weighting** (paper Eq. 4/5): upweight prompt groups with higher RM disagreement.
 
 ## Where It Runs In `verl`
 
-- Signal extraction (per sample): `verl/experimental/reward_loop/reward_manager/hero.py`
-- Group-level shaping (per batch, grouped by `uid`): `verl/experimental/reward_loop/reward_loop.py`
+- Signal extraction: `verl/experimental/reward_loop/reward_manager/hero.py`
+- Group-level shaping: `verl/experimental/reward_loop/reward_loop.py`
 - Core shaping math: `verl/utils/reward_score/hero.py`
 
-## Configuration
+## Paper-Aligned Defaults
 
-Enable HERO reward manager and a dense reward model:
+For the Qwen3-4B setting in Table 6:
+- prompt length: `1024`
+- response length: `8192`
+- PPO learning rate: `1e-6`
+- rollout samples per prompt: `8`
+- rollout temperature: `1.0`
+- no KL loss
+- no entropy bonus
+- dense reward model: `nvidia/AceMath-7B-RM`
+- verifier: `math_verify`
+
+Appendix A.1 hyperparameters:
+- verifiable-only: `alpha=0.05`, `beta=0.05`
+- mixed / hard-to-verify: `alpha=0.1`, `beta=0.1`
+- `w_min=0.4`, `w_max=3.0`, `k=6.0`
+
+## Data Preparation
+
+The paper uses OpenMathReasoning with `problem_type == has_answer_extracted`, samples `40k` source problems, generates candidate solutions, then builds:
+- `train_verifiable.parquet`
+- `train_hard_to_verify.parquet`
+- `train_mixed.parquet`
+- matching validation splits
+
+Use the following helpers:
+- `examples/data_preprocess/openmathreasoning_hero_source.py`: build prompt-only source parquet for candidate generation
+- `examples/data_preprocess/openmathreasoning_hero.py`: build HERO RL splits from generated `responses`
+- `examples/data_preprocess/openmathreasoning_hero_sft.py`: build the 2k cold-start SFT set from generated responses
+- `examples/data_preprocess/hero_eval_benchmarks.py`: build evaluation parquet files
+- `examples/data_preprocess/hero_filter_textbook_reasoning.py`: optional paper-style TBR filtering
+
+## Training And Eval Wrappers
+
+Wrappers added for the paper reproduction path:
+- `examples/hero/run_hero_cold_start_sft.sh`
+- `examples/hero/run_hero_train.sh`
+- `examples/hero/run_hero_eval.sh`
+- `examples/hero/run_hero_pipeline.sh`
+
+`run_hero_train.sh` now exports Hugging Face checkpoints by default via:
+- `actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model']`
+
+This makes the latest actor checkpoint directly usable by evaluation.
+
+## Evaluation Protocol
+
+Paper-aligned evaluation details implemented in this repo:
+- decoding uses `N=8`, `temperature=0.6`, `top_p=0.95`
+- verifiable benchmarks are scored by `math_verify`
+- hard-to-verify benchmarks are scored by LLM-as-judge
+- only the first decoded response is scored for pass@1 reproduction
+
+The first-response selection is handled by:
+- `verl/trainer/main_eval.py`
+- `examples/hero/eval_hero_llm_judge.py`
+- `examples/hero/run_hero_eval.sh`
+
+## One-Command Pipeline
+
+End-to-end reproduction from one bash entrypoint:
 
 ```bash
-reward.reward_manager.name=hero
-reward.reward_model.enable=True
-reward.reward_model.model_path=<your_dense_rm_path>
+bash examples/hero/run_hero_pipeline.sh
 ```
 
-HERO hyperparameters are under `reward.reward_kwargs.hero`:
-
-```yaml
-reward:
-  reward_kwargs:
-    hero:
-      alpha: 0.1
-      beta: 0.1
-      eps: 1e-6
-      w_min: 0.4
-      w_max: 3.0
-      k: 6.0
-      sigma_ema: 0.9
-```
-
-Notes:
-- `alpha`, `beta` control stratified reward ranges.
-- `w_min`, `w_max`, `k` control logistic difficulty reweighting.
-- `sigma_ema` smooths the running `sigma_bar` used by the weighting function.
-
-## Dataset Preparation
-
-Use ``examples/data_preprocess/openmathreasoning_hero.py`` to build
-verifiable / hard-to-verify / mixed splits from either:
-- a Hugging Face dataset repo via `--dataset`
-- a local dataset path via `--local_dataset_path`
-
-The script still writes parquet files for `verl` training, and can now also:
-- save a processed Hugging Face `DatasetDict` via `--hf_save_dir`
-- upload that `DatasetDict` via `--push_to_hub_repo`
-
-Example:
-
-```bash
-python examples/data_preprocess/openmathreasoning_hero.py \
-  --dataset your-org/your-openmath \
-  --dataset_config main \
-  --split train \
-  --question_col question \
-  --answer_col answer \
-  --candidate_col candidate_solution \
-  --local_save_dir ~/data/openmathreasoning_hero \
-  --hf_save_dir ~/data/openmathreasoning_hero_hf
-```
-
-End-to-end preprocessing + training:
-
-```bash
-bash examples/grpo_trainer/run_qwen3_4b_hero_from_hf.sh \
-  trainer.n_gpus_per_node=8 \
-  trainer.nnodes=1
-```
-
-Useful environment variables for the wrapper:
-- `HERO_DATASET` / `HERO_DATASET_CONFIG`
-- `HERO_LOCAL_DATASET_PATH`
-- `HERO_QUESTION_COL` / `HERO_ANSWER_COL` / `HERO_CANDIDATE_COL`
-- `HERO_LOCAL_SAVE_DIR`
-- `HERO_HF_SAVE_DIR`
-- `HERO_PUSH_TO_HUB_REPO`
-- `HERO_SKIP_PREPROCESS=1` to reuse existing parquet splits
+Useful environment variables:
+- `HERO_MODEL_PATH` or `HERO_BASE_MODEL_PATH`
+- `HERO_LOCAL_DATASET_PATH` if OpenMathReasoning is already local
+- `HERO_HVM_LOCAL_PATH` / `HERO_TBR_LOCAL_PATH` for local hard-to-verify datasets
+- `HERO_FILTER_TBR=1` to enable the optional paper-style TBR filtering stage
+- `HERO_ENABLE_COLD_START_SFT=0` to skip cold-start SFT
+- `HERO_TRAIN_OUTPUT_DIR`, `HERO_SFT_OUTPUT_DIR`, `HERO_EVAL_OUTPUT_DIR` to control artifact locations
 
 ## Output Diagnostics
 
-When HERO is enabled, reward loop emits extra fields:
-- `acc` (verifier/rule score)
+When HERO is enabled, reward loop emits:
+- `acc`
 - `hero_rule_score`
 - `hero_rm_score`
 - `hero_stratified_score`
@@ -105,5 +108,3 @@ When HERO is enabled, reward loop emits extra fields:
 - `hero_group_sigma`
 - `hero_sigma_bar`
 - `hero_final_score`
-
-These fields are available through the existing reward extra-info logging path.
