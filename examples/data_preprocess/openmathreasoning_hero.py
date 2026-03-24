@@ -18,7 +18,11 @@ This script follows the paper's split design:
 - hard-to-verify subset (verifier fail)
 - mixed subset (balanced concat of both)
 
-It expects a candidate solution column for verifier pass/fail filtering.
+It supports two source formats:
+1. raw OpenMathReasoning-style tables with a `candidate_solution` column
+2. generated parquet files with a list-valued `responses` column, where a
+   designated primary response is treated as the candidate solution
+
 Following the paper, it first samples a fixed-size candidate pool from the
 filtered source dataset before running verifier-based stratification.
 """
@@ -54,14 +58,48 @@ def _sample(ds: datasets.Dataset, size: int, seed: int) -> datasets.Dataset:
     return ds.shuffle(seed=seed).select(range(size))
 
 
+def _resolve_dataset_split(dataset_obj: datasets.Dataset | datasets.DatasetDict, split: str) -> datasets.Dataset:
+    if isinstance(dataset_obj, datasets.DatasetDict):
+        if split in dataset_obj:
+            return dataset_obj[split]
+        if "train" in dataset_obj:
+            return dataset_obj["train"]
+        first_split = next(iter(dataset_obj.keys()))
+        return dataset_obj[first_split]
+    return dataset_obj
+
+
+def _load_local_dataset(local_dataset_path: str, split: str) -> datasets.Dataset:
+    local_dataset_path = os.path.expanduser(local_dataset_path)
+    if not os.path.exists(local_dataset_path):
+        raise FileNotFoundError(f"Local dataset path does not exist: {local_dataset_path}")
+
+    if os.path.isdir(local_dataset_path):
+        try:
+            return _resolve_dataset_split(datasets.load_from_disk(local_dataset_path), split)
+        except Exception:
+            return datasets.load_dataset(local_dataset_path, split=split)
+
+    suffix = os.path.splitext(local_dataset_path)[1].lower()
+    if suffix == ".parquet":
+        return datasets.load_dataset("parquet", data_files=local_dataset_path, split="train")
+    if suffix in {".json", ".jsonl"}:
+        return datasets.load_dataset("json", data_files=local_dataset_path, split="train")
+    if suffix == ".csv":
+        return datasets.load_dataset("csv", data_files=local_dataset_path, split="train")
+    return datasets.load_dataset(local_dataset_path, split=split)
+
+
 def _load_source_dataset(args: argparse.Namespace) -> datasets.Dataset:
-    dataset_path = args.local_dataset_path if args.local_dataset_path is not None else args.dataset
+    if args.local_dataset_path is not None:
+        return _load_local_dataset(args.local_dataset_path, args.split)
+
     load_kwargs: dict[str, Any] = {"split": args.split}
     if args.dataset_config is not None:
         load_kwargs["name"] = args.dataset_config
     if args.trust_remote_code:
         load_kwargs["trust_remote_code"] = True
-    return datasets.load_dataset(dataset_path, **load_kwargs)
+    return datasets.load_dataset(args.dataset, **load_kwargs)
 
 
 def _export_hf_dataset(
@@ -91,10 +129,37 @@ def _export_hf_dataset(
         dataset_dict.push_to_hub(push_to_hub_repo, private=hub_private)
 
 
+def _select_candidate_solution(example: dict[str, Any], args: argparse.Namespace) -> str:
+    candidate_value = example.get(args.candidate_col, None)
+    if candidate_value is not None:
+        candidate_solution = str(candidate_value).strip()
+        if candidate_solution:
+            return candidate_solution
+
+    if args.response_col not in example:
+        return ""
+
+    response_value = example.get(args.response_col)
+    if isinstance(response_value, (list, tuple)):
+        if not response_value:
+            return ""
+        index = args.primary_response_index
+        if index < 0:
+            index += len(response_value)
+        if index < 0 or index >= len(response_value):
+            raise IndexError(
+                f"primary_response_index={args.primary_response_index} is out of range for "
+                f"{len(response_value)} responses."
+            )
+        return str(response_value[index]).strip()
+
+    return str(response_value).strip()
+
+
 def _build_processed_example(example: dict[str, Any], idx: int, args: argparse.Namespace) -> dict[str, Any]:
     question = str(example[args.question_col]).strip()
     ground_truth = str(example[args.answer_col]).strip()
-    candidate_solution = str(example.get(args.candidate_col, "")).strip()
+    candidate_solution = _select_candidate_solution(example, args)
     verifier_pass = int(_verify(candidate_solution, ground_truth) > 0.5)
     prompt = f"{question} {args.instruction}".strip()
     return {
@@ -126,7 +191,7 @@ def main():
     parser.add_argument("--dataset", default="OpenMathReasoning")
     parser.add_argument("--dataset_config", default=None, help="Optional HF dataset config/subset name.")
     parser.add_argument("--split", default="train")
-    parser.add_argument("--local_dataset_path", default=None, help="Optional local dataset path for load_dataset.")
+    parser.add_argument("--local_dataset_path", default=None, help="Optional local dataset path or parquet file.")
     parser.add_argument(
         "--trust_remote_code",
         action="store_true",
@@ -135,6 +200,17 @@ def main():
     parser.add_argument("--question_col", default="question")
     parser.add_argument("--answer_col", default="answer")
     parser.add_argument("--candidate_col", default="candidate_solution")
+    parser.add_argument(
+        "--response_col",
+        default="responses",
+        help="Fallback response column used when candidate_col is absent or empty.",
+    )
+    parser.add_argument(
+        "--primary_response_index",
+        type=int,
+        default=0,
+        help="If response_col is list-valued, use this response as the candidate solution.",
+    )
     parser.add_argument("--problem_type_col", default="problem_type")
     parser.add_argument("--problem_type_value", default="has_answer_extracted")
     parser.add_argument("--verifiable_train_size", type=int, default=2000)
@@ -196,15 +272,15 @@ def main():
     if args.source_sample_size > 0 and len(dataset) > args.source_sample_size:
         dataset = _sample(dataset, args.source_sample_size, args.seed + 100)
 
-    if args.candidate_col not in dataset.column_names:
-        raise ValueError(
-            f"Missing candidate column `{args.candidate_col}`. "
-            "Please provide model-generated solutions for verifier pass/fail splitting."
-        )
-
     if args.question_col not in dataset.column_names or args.answer_col not in dataset.column_names:
         raise ValueError(
             f"Expected `{args.question_col}` and `{args.answer_col}` in dataset columns, got {dataset.column_names}"
+        )
+
+    if args.candidate_col not in dataset.column_names and args.response_col not in dataset.column_names:
+        raise ValueError(
+            f"Missing both candidate column `{args.candidate_col}` and response column `{args.response_col}`. "
+            "Please provide model-generated solutions or a generated parquet with `responses`."
         )
 
     verifiable_target = args.verifiable_train_size + args.verifiable_val_size
@@ -273,8 +349,9 @@ def main():
         hub_private=args.hub_private,
     )
 
+    source_id = args.local_dataset_path if args.local_dataset_path is not None else args.dataset
     meta = {
-        "dataset": args.dataset,
+        "dataset": source_id,
         "dataset_config": args.dataset_config,
         "split": args.split,
         "source_sample_size": args.source_sample_size,
@@ -282,6 +359,8 @@ def main():
         "question_col": args.question_col,
         "answer_col": args.answer_col,
         "candidate_col": args.candidate_col,
+        "response_col": args.response_col,
+        "primary_response_index": args.primary_response_index,
         "problem_type_filter": {args.problem_type_col: args.problem_type_value},
         "counts": {name: len(ds) for name, ds in outputs.items()},
         "hf_save_dir": args.hf_save_dir,
