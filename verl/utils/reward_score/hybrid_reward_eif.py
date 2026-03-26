@@ -15,17 +15,15 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
-import random
 import re
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from verl.utils.reward_score.one_step_eif import compute_one_step_scores
+from verl.utils.reward_score.one_step_eif import compute_algorithm1_scores
 
 
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][-+]?\d+)?")
@@ -131,73 +129,22 @@ def extract_question_text(raw_prompt: Any = None, *, extra_info: Any = None, fal
     return str(fallback)
 
 
-def _stable_hash_int(*parts: Any) -> int:
-    hasher = hashlib.sha256()
-    for part in parts:
-        hasher.update(str(part).encode("utf-8"))
-        hasher.update(b"\0")
-    return int.from_bytes(hasher.digest()[:8], byteorder="big", signed=False)
 
 
-def build_aux_index_sets(
-    group_size: int,
-    num_aux_samples: int = -1,
-    *,
-    include_self_in_aux: bool = False,
-    selection_mode: str = "cyclic",
-    uid: Any = None,
-) -> list[list[int]]:
-    if group_size <= 0:
-        raise ValueError(f"group_size must be positive, got {group_size}.")
 
-    max_available = group_size if include_self_in_aux else group_size - 1
-    if max_available < 2:
-        raise ValueError(
-            "Online hybrid EIF requires at least 2 auxiliary samples per primary response. "
-            f"Got {group_size=} and {include_self_in_aux=}."
-        )
-
-    if num_aux_samples in (None, -1):
-        num_aux_samples = max_available
-
-    num_aux_samples = int(num_aux_samples)
-    if num_aux_samples < 2:
-        raise ValueError(f"num_aux_samples must be >= 2, got {num_aux_samples}.")
-    if num_aux_samples > max_available:
-        raise ValueError(
-            f"num_aux_samples={num_aux_samples} exceeds available auxiliary responses {max_available}."
-        )
-
-    aux_index_sets: list[list[int]] = []
-    for primary_idx in range(group_size):
-        if selection_mode == "cyclic":
-            ordered = [(primary_idx + offset) % group_size for offset in range(group_size)]
-            candidates = [idx for idx in ordered if include_self_in_aux or idx != primary_idx]
-        elif selection_mode == "hash_shuffle":
-            candidates = list(range(group_size))
-            if not include_self_in_aux:
-                candidates.remove(primary_idx)
-            rng = random.Random(_stable_hash_int(uid, primary_idx, group_size, num_aux_samples, selection_mode))
-            rng.shuffle(candidates)
-        else:
-            raise ValueError(f"Unsupported auxiliary selection mode: {selection_mode}")
-
-        aux_index_sets.append(candidates[:num_aux_samples])
-
-    return aux_index_sets
-
-
-def compute_online_eif_scores(
-    phi_scores: np.ndarray | list[float], tau_samples: np.ndarray | list[list[float]]
+def compute_algorithm1_online_scores(
+    phi_scores: np.ndarray | list[float],
+    tau_scores: np.ndarray | list[float],
+    m_scores: np.ndarray | list[float],
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     phi = np.asarray(phi_scores, dtype=np.float64)
-    tau = np.asarray(tau_samples, dtype=np.float64)
-    scores = compute_one_step_scores(phi, tau)
+    tau = np.asarray(tau_scores, dtype=np.float64)
+    m = np.asarray(m_scores, dtype=np.float64)
+    scores = compute_algorithm1_scores(phi, tau, m)
     diagnostics = {
         "phi": phi.astype(np.float64, copy=False),
-        "tau_control": tau[:, 0].astype(np.float64, copy=False),
-        "tau_mc_mean": np.mean(tau[:, 1:], axis=1).astype(np.float64, copy=False),
-        "num_aux_samples": np.full(phi.shape[0], tau.shape[1], dtype=np.int64),
+        "tau": tau.astype(np.float64, copy=False),
+        "m": m.astype(np.float64, copy=False),
     }
     return scores, diagnostics
 
@@ -264,11 +211,7 @@ def normalize_chat_prompt(raw_prompt: Any) -> list[dict[str, str]] | None:
 
 
 def build_aux_reward_messages(question: str, response: str) -> list[dict[str, str]]:
-    """Build prompt messages for the auxiliary reward model (r_ij generator).
-
-    The auxiliary model evaluates (x_i, y_i) and outputs a score in [0, 1].
-    Called M+1 times with temperature > 0 to produce diverse auxiliary samples.
-    """
+    """Build prompt messages for the scalar auxiliary reward r_i."""
     return [
         {
             "role": "system",
@@ -290,8 +233,34 @@ def build_aux_reward_messages(question: str, response: str) -> list[dict[str, st
     ]
 
 
+def build_reward_model_messages(question: str, response: str, raw_prompt: Any = None) -> list[dict[str, str]]:
+    """Build a discriminative RM conversation for AceMath-style scoring."""
+    prompt_messages = normalize_chat_prompt(raw_prompt)
+    if prompt_messages:
+        return [*prompt_messages, {"role": "assistant", "content": response}]
+    if question.strip():
+        return [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": response},
+        ]
+    raise ValueError("Either `question` or `raw_prompt` must provide reward-model context.")
+
+
+def build_reward_model_prompt(question: str, response: str, reward_model_tokenizer: Any, raw_prompt: Any = None) -> str:
+    messages = build_reward_model_messages(question, response, raw_prompt=raw_prompt)
+    rm_prompt = reward_model_tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=False,
+        tokenize=False,
+    )
+    bos_token = getattr(reward_model_tokenizer, "bos_token", None)
+    if bos_token is not None and isinstance(rm_prompt, str) and rm_prompt.startswith(bos_token):
+        rm_prompt = rm_prompt[len(bos_token) :]
+    return rm_prompt
+
+
 def build_tau_messages(question: str, primary_response: str, aux_reward: float) -> list[dict[str, str]]:
-    """Build prompt messages for tau_LLM, conditioned on the auxiliary reward r_ij."""
+    """Build prompt messages for tau_LLM, conditioned on the scalar auxiliary reward r_i."""
     return [
         {
             "role": "system",
@@ -313,6 +282,27 @@ def build_tau_messages(question: str, primary_response: str, aux_reward: float) 
     ]
 
 
+def build_m_messages(question: str, primary_response: str) -> list[dict[str, str]]:
+    """Build prompt messages for m_LLM = E[phi | x, y]."""
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You estimate m(x, y): the probability that a math response is correct before seeing "
+                "any auxiliary signal. Return only one number between 0 and 1."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question:\n{question}\n\n"
+                f"Primary response:\n{primary_response}\n\n"
+                "Estimate m(x, y) = P(phi=1 | question, response). Return only the number."
+            ),
+        },
+    ]
+
+
 def parse_tau_score(text: str) -> float:
     if not isinstance(text, str):
         raise TypeError(f"tau response must be a string, got {type(text).__name__}.")
@@ -325,6 +315,14 @@ def parse_tau_score(text: str) -> float:
     return min(1.0, max(0.0, value))
 
 
+def parse_discriminative_rm_score(result: dict[str, Any], engine_name: str) -> float:
+    if engine_name == "vllm":
+        return float(result["data"][-1]["probs"][-1])
+    if engine_name == "sglang":
+        return float(result["data"][-1]["embedding"][-1])
+    raise NotImplementedError(f"Unsupported discriminative RM backend: {engine_name}")
+
+
 def _normalize_http_base(url: str) -> str:
     normalized = url.strip()
     if not normalized.startswith("http://") and not normalized.startswith("https://"):
@@ -333,179 +331,87 @@ def _normalize_http_base(url: str) -> str:
 
 
 @dataclass
-class AuxRewardScorer:
-    """Generative auxiliary reward scorer for r_ij.
+class AceMathRewardScorer:
+    """Discriminative AceMath RM scorer that reuses the reward-router API."""
 
-    Scores (x_i, y_i) pairs by prompting a generative instruct model to output
-    a probability estimate in [0, 1].  Called M+1 times with temperature > 0 to
-    produce diverse auxiliary reward samples.
-
-    Default model: Qwen/Qwen2.5-7B-Instruct served via an OpenAI-compatible API.
-    """
-
-    model: str = "Qwen/Qwen2.5-7B-Instruct"
-    base_url: str = "http://localhost:8000/v1"
-    api_key_env: str = "OPENAI_API_KEY"
-    temperature: float = 1.0
-    max_tokens: int = 16
+    model: str = 'nvidia/AceMath-7B-RM'
+    base_url: str = 'http://localhost:8000'
+    engine_name: str = 'vllm'
+    reward_model_tokenizer: Any = None
     timeout: float = 300.0
-    client: Any = None
 
-    def _get_client(self):
-        if self.client is not None:
-            return self.client
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise ImportError(
-                "The `openai` package is required for the auxiliary reward scorer."
-            ) from exc
-        self.client = OpenAI(api_key=os.environ.get(self.api_key_env), base_url=self.base_url)
-        return self.client
-
-    def _build_headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        api_key = os.environ.get(self.api_key_env)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        return headers
-
-    def score(self, question: str, response_text: str) -> float:
-        completion = self._get_client().chat.completions.create(
-            model=self.model,
-            messages=build_aux_reward_messages(question, response_text),
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        content = completion.choices[0].message.content
-        return parse_tau_score("" if content is None else str(content))
-
-    def score_many(self, question: str, responses: list[str]) -> list[float]:
-        return [self.score(question, response_text) for response_text in responses]
+    def _build_payload(self, rm_prompt: str) -> tuple[str, dict[str, Any]]:
+        if self.engine_name == 'vllm':
+            return 'classify', {
+                'model': self.model,
+                'input': rm_prompt,
+                'activation': False,
+            }
+        if self.engine_name == 'sglang':
+            return 'v1/embeddings', {
+                'model': self.model,
+                'input': rm_prompt,
+            }
+        raise NotImplementedError(f'Unsupported discriminative RM backend: {self.engine_name}')
 
     async def score_async(
         self,
         question: str,
         response_text: str,
         *,
+        raw_prompt: Any = None,
         session=None,
         semaphore=None,
     ) -> float:
-        if session is None:
-            raise ValueError("session is required for async auxiliary reward scoring.")
+        if self.reward_model_tokenizer is None:
+            raise ValueError('reward_model_tokenizer is required for AceMathRewardScorer.')
 
-        async def _score_once() -> float:
-            payload = {
-                "model": self.model,
-                "messages": build_aux_reward_messages(question, response_text),
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
-            url = f"{_normalize_http_base(self.base_url)}/chat/completions"
-            async with session.post(url, json=payload, headers=self._build_headers()) as resp:
+        rm_prompt = build_reward_model_prompt(
+            question,
+            response_text,
+            self.reward_model_tokenizer,
+            raw_prompt=raw_prompt,
+        )
+        endpoint, payload = self._build_payload(rm_prompt)
+
+        async def _score_once(active_session) -> float:
+            url = f'{_normalize_http_base(self.base_url)}/{endpoint}'
+            async with active_session.post(url, json=payload) as resp:
                 resp.raise_for_status()
                 result = await resp.json()
-            content = result["choices"][0]["message"].get("content")
-            return parse_tau_score("" if content is None else str(content))
-
-        if semaphore is None:
-            return await _score_once()
-        async with semaphore:
-            return await _score_once()
-
-    async def score_many_async(
-        self,
-        question: str,
-        responses: list[str],
-        *,
-        session=None,
-        semaphore=None,
-    ) -> list[float]:
-        import aiohttp
+            return parse_discriminative_rm_score(result, self.engine_name)
 
         if session is None:
+            import aiohttp
+
             timeout = aiohttp.ClientTimeout(total=self.timeout)
-            connector = aiohttp.TCPConnector(limit=0)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as owned_session:
-                tasks = [
-                    self.score_async(
-                        question,
-                        response_text,
-                        session=owned_session,
-                        semaphore=semaphore,
-                    )
-                    for response_text in responses
-                ]
-                return list(await asyncio.gather(*tasks))
+            async with aiohttp.ClientSession(timeout=timeout) as owned_session:
+                if semaphore is None:
+                    return await _score_once(owned_session)
+                async with semaphore:
+                    return await _score_once(owned_session)
 
-        tasks = [
-            self.score_async(question, response_text, session=session, semaphore=semaphore)
-            for response_text in responses
-        ]
-        return list(await asyncio.gather(*tasks))
+        if semaphore is None:
+            return await _score_once(session)
+        async with semaphore:
+            return await _score_once(session)
+
+    def score(self, question: str, response_text: str, *, raw_prompt: Any = None) -> float:
+        return asyncio.run(self.score_async(question, response_text, raw_prompt=raw_prompt))
 
 
-async def compute_response_online_eif(
-    *,
-    question: str,
-    response: str,
-    phi_score: float,
-    aux_scorer: AuxRewardScorer,
-    tau_scorer: TauLLMScorer,
-    raw_prompt: Any = None,
-    num_aux_samples: int = 2,
-    aux_session=None,
-    tau_session=None,
-    aux_semaphore=None,
-    tau_semaphore=None,
-) -> dict[str, Any]:
-    """Compute online EIF for a single (x_i, y_i) pair.
-
-    1. Call aux_scorer M+1 times on (question, response) → r_{i1}...r_{i,M+1}
-    2. Call tau_scorer M+1 times with (question, response, r_{ij}) → tau values
-    3. Compute one-step EIF aggregation.
-    """
-    num_aux_samples = int(num_aux_samples)
-    if num_aux_samples < 2:
-        raise ValueError(f"num_aux_samples must be >= 2, got {num_aux_samples}.")
-
-    repeated_responses = [response] * num_aux_samples
-    aux_rewards = await aux_scorer.score_many_async(
-        question,
-        repeated_responses,
-        session=aux_session,
-        semaphore=aux_semaphore,
-    )
-    tau_samples = await tau_scorer.score_many_async(
-        question,
-        response,
-        aux_rewards,
-        session=tau_session,
-        semaphore=tau_semaphore,
-    )
-    scores, diagnostics = compute_online_eif_scores([phi_score], [tau_samples])
-    return {
-        "score": float(scores[0]),
-        "aux_rewards": np.asarray(aux_rewards, dtype=np.float64),
-        "tau_samples": np.asarray(tau_samples, dtype=np.float64),
-        "diagnostics": {
-            "phi": float(diagnostics["phi"][0]),
-            "tau_control": float(diagnostics["tau_control"][0]),
-            "tau_mc_mean": float(diagnostics["tau_mc_mean"][0]),
-            "num_aux_samples": int(diagnostics["num_aux_samples"][0]),
-        },
-    }
 
 
 @dataclass
 class TauLLMScorer:
-    model: str = "gpt-oss"
+    model: str = "qwen3"
     base_url: str = "https://ellm.nrp-nautilus.io/v1"
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.0
     max_tokens: int = 16
     timeout: float = 300.0
     client: Any = None
+    async_client: Any = None
 
     def _get_client(self):
         if self.client is not None:
@@ -515,11 +421,29 @@ class TauLLMScorer:
         except ImportError as exc:
             raise ImportError(
                 "The `openai` package is required to generate tau_LLM scores. "
-                "Install it or provide precomputed aux_tau_values."
+                "Install it or configure a reachable tau_LLM endpoint."
             ) from exc
 
-        self.client = OpenAI(api_key=os.environ.get(self.api_key_env), base_url=self.base_url)
+        self.client = OpenAI(api_key=os.environ.get(self.api_key_env), base_url=self.base_url, timeout=self.timeout)
         return self.client
+
+    def _get_async_client(self):
+        if self.async_client is not None:
+            return self.async_client
+        try:
+            from openai import AsyncOpenAI
+        except ImportError as exc:
+            raise ImportError(
+                "The `openai` package is required to generate tau_LLM scores. "
+                "Install it or configure a reachable tau_LLM endpoint."
+            ) from exc
+
+        self.async_client = AsyncOpenAI(
+            api_key=os.environ.get(self.api_key_env),
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
+        return self.async_client
 
     def score(self, question: str, primary_response: str, ace_reward: float) -> float:
         completion = self._get_client().chat.completions.create(
@@ -550,21 +474,14 @@ class TauLLMScorer:
         session=None,
         semaphore=None,
     ) -> float:
-        if session is None:
-            raise ValueError("session is required for async tau scoring.")
-
         async def _score_once() -> float:
-            payload = {
-                "model": self.model,
-                "messages": build_tau_messages(question, primary_response, ace_reward),
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
-            url = f"{_normalize_http_base(self.base_url)}/chat/completions"
-            async with session.post(url, json=payload, headers=self._build_headers()) as resp:
-                resp.raise_for_status()
-                result = await resp.json()
-            content = result["choices"][0]["message"].get("content")
+            completion = await self._get_async_client().chat.completions.create(
+                model=self.model,
+                messages=build_tau_messages(question, primary_response, ace_reward),
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            content = completion.choices[0].message.content
             return parse_tau_score("" if content is None else str(content))
 
         if semaphore is None:
@@ -581,24 +498,6 @@ class TauLLMScorer:
         session=None,
         semaphore=None,
     ) -> list[float]:
-        import aiohttp
-
-        if session is None:
-            timeout = aiohttp.ClientTimeout(total=self.timeout)
-            connector = aiohttp.TCPConnector(limit=0)
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as owned_session:
-                tasks = [
-                    self.score_async(
-                        question,
-                        primary_response,
-                        ace_reward,
-                        session=owned_session,
-                        semaphore=semaphore,
-                    )
-                    for ace_reward in ace_rewards
-                ]
-                return list(await asyncio.gather(*tasks))
-
         tasks = [
             self.score_async(
                 question,
@@ -612,104 +511,138 @@ class TauLLMScorer:
         return list(await asyncio.gather(*tasks))
 
 
-async def compute_group_online_eif(
+@dataclass
+class MarginalLLMScorer:
+    model: str = 'qwen3'
+    base_url: str = 'https://ellm.nrp-nautilus.io/v1'
+    api_key_env: str = 'OPENAI_API_KEY'
+    temperature: float = 0.0
+    max_tokens: int = 16
+    timeout: float = 300.0
+    client: Any = None
+    async_client: Any = None
+
+    def _get_client(self):
+        if self.client is not None:
+            return self.client
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ImportError(
+                'The `openai` package is required to generate m_LLM scores. '
+                'Install it or provide precomputed m_llm_value.'
+            ) from exc
+
+        self.client = OpenAI(api_key=os.environ.get(self.api_key_env), base_url=self.base_url, timeout=self.timeout)
+        return self.client
+
+    def _get_async_client(self):
+        if self.async_client is not None:
+            return self.async_client
+        try:
+            from openai import AsyncOpenAI
+        except ImportError as exc:
+            raise ImportError(
+                'The `openai` package is required to generate m_LLM scores. '
+                'Install it or provide precomputed m_llm_value.'
+            ) from exc
+
+        self.async_client = AsyncOpenAI(
+            api_key=os.environ.get(self.api_key_env),
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
+        return self.async_client
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {'Content-Type': 'application/json'}
+        api_key = os.environ.get(self.api_key_env)
+        if api_key:
+            headers['Authorization'] = f'Bearer {api_key}'
+        return headers
+
+    def score(self, question: str, primary_response: str) -> float:
+        completion = self._get_client().chat.completions.create(
+            model=self.model,
+            messages=build_m_messages(question, primary_response),
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        content = completion.choices[0].message.content
+        return parse_tau_score('' if content is None else str(content))
+
+    async def score_async(
+        self,
+        question: str,
+        primary_response: str,
+        *,
+        session=None,
+        semaphore=None,
+    ) -> float:
+        async def _score_once() -> float:
+            completion = await self._get_async_client().chat.completions.create(
+                model=self.model,
+                messages=build_m_messages(question, primary_response),
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            content = completion.choices[0].message.content
+            return parse_tau_score('' if content is None else str(content))
+
+        if semaphore is None:
+            return await _score_once()
+        async with semaphore:
+            return await _score_once()
+
+
+async def compute_response_algorithm1_eif(
     *,
-    uid: Any,
     question: str,
-    responses: list[str],
-    phi_scores: list[float] | np.ndarray,
-    aux_scorer: AuxRewardScorer,
+    response: str,
+    phi_score: float,
+    aux_scorer: AceMathRewardScorer,
     tau_scorer: TauLLMScorer,
+    m_scorer: MarginalLLMScorer,
     raw_prompt: Any = None,
-    num_aux_samples: int = -1,
-    include_self_in_aux: bool = False,
-    selection_mode: str = "cyclic",
     aux_session=None,
     tau_session=None,
+    m_session=None,
     aux_semaphore=None,
     tau_semaphore=None,
+    m_semaphore=None,
 ) -> dict[str, Any]:
-    if len(responses) == 0:
-        raise ValueError("responses must be non-empty for online hybrid EIF.")
-
-    phi = np.asarray(phi_scores, dtype=np.float64)
-    if phi.shape[0] != len(responses):
-        raise ValueError(f"phi_scores length {phi.shape[0]} does not match responses length {len(responses)}.")
-
-    aux_index_sets = build_aux_index_sets(
-        len(responses),
-        num_aux_samples=num_aux_samples,
-        include_self_in_aux=include_self_in_aux,
-        selection_mode=selection_mode,
-        uid=uid,
-    )
-    aux_rewards = await aux_scorer.score_many_async(
+    """Compute the literal Algorithm 1 score for one (x_i, y_i, phi_i, r_i)."""
+    aux_reward = await aux_scorer.score_async(
         question,
-        responses,
+        response,
+        raw_prompt=raw_prompt,
         session=aux_session,
         semaphore=aux_semaphore,
     )
-
-    tau_tasks = []
-    for primary_idx, aux_indices in enumerate(aux_index_sets):
-        aux_subset = [aux_rewards[aux_idx] for aux_idx in aux_indices]
-        tau_tasks.append(
-            tau_scorer.score_many_async(
-                question,
-                responses[primary_idx],
-                aux_subset,
-                session=tau_session,
-                semaphore=tau_semaphore,
-            )
-        )
-    tau_results = await asyncio.gather(*tau_tasks, return_exceptions=True)
-
-    num_rows = len(responses)
-    num_aux_per_row = len(aux_index_sets[0])
-    tau_samples = np.full((num_rows, num_aux_per_row), np.nan, dtype=np.float64)
-    scores = phi.astype(np.float64, copy=True)
-    diagnostics = {
-        "phi": phi.astype(np.float64, copy=False),
-        "tau_control": np.full(num_rows, np.nan, dtype=np.float64),
-        "tau_mc_mean": np.full(num_rows, np.nan, dtype=np.float64),
-        "num_aux_samples": np.asarray([len(indices) for indices in aux_index_sets], dtype=np.int64),
-        "row_fallback": np.ones(num_rows, dtype=np.int64),
-    }
-
-    successful_rows: list[int] = []
-    successful_tau_rows: list[np.ndarray] = []
-    row_errors: list[str | None] = [None] * num_rows
-    for row_idx, tau_result in enumerate(tau_results):
-        if isinstance(tau_result, Exception):
-            row_errors[row_idx] = str(tau_result)
-            continue
-        tau_row = np.asarray(tau_result, dtype=np.float64)
-        if tau_row.ndim != 1 or tau_row.shape[0] != num_aux_per_row:
-            row_errors[row_idx] = (
-                f"tau row has invalid shape {tau_row.shape}, expected ({num_aux_per_row},)."
-            )
-            continue
-        tau_samples[row_idx] = tau_row
-        successful_rows.append(row_idx)
-        successful_tau_rows.append(tau_row)
-
-    if successful_rows:
-        successful_indices = np.asarray(successful_rows, dtype=np.int64)
-        successful_scores, successful_diag = compute_online_eif_scores(
-            phi[successful_indices],
-            np.stack(successful_tau_rows, axis=0),
-        )
-        scores[successful_indices] = successful_scores
-        diagnostics["tau_control"][successful_indices] = successful_diag["tau_control"]
-        diagnostics["tau_mc_mean"][successful_indices] = successful_diag["tau_mc_mean"]
-        diagnostics["num_aux_samples"][successful_indices] = successful_diag["num_aux_samples"]
-        diagnostics["row_fallback"][successful_indices] = 0
-
+    tau_score, m_score = await asyncio.gather(
+        tau_scorer.score_async(
+            question,
+            response,
+            aux_reward,
+            session=tau_session,
+            semaphore=tau_semaphore,
+        ),
+        m_scorer.score_async(
+            question,
+            response,
+            session=m_session,
+            semaphore=m_semaphore,
+        ),
+    )
+    scores, diagnostics = compute_algorithm1_online_scores([phi_score], [tau_score], [m_score])
     return {
-        "scores": scores,
-        "aux_rewards": np.asarray(aux_rewards, dtype=np.float64),
-        "tau_samples": tau_samples,
-        "aux_index_sets": aux_index_sets,
-        "diagnostics": diagnostics,
-        "row_errors": row_errors,
+        'score': float(scores[0]),
+        'aux_reward': float(aux_reward),
+        'tau_score': float(tau_score),
+        'm_score': float(m_score),
+        'diagnostics': {
+            'phi': float(diagnostics['phi'][0]),
+            'tau': float(diagnostics['tau'][0]),
+            'm': float(diagnostics['m'][0]),
+        },
     }

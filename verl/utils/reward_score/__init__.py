@@ -56,6 +56,36 @@ def default_compute_score(
 
         # from . import math_verify
         # res = math_verify.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "math500",
+        "amc",
+        "minerva",
+        "olympiad",
+    ]:
+        # HERO paper eval benchmarks (verifiable tasks, scored with math_verify).
+        try:
+            from . import math_verify
+
+            res = math_verify.compute_score(solution_str, ground_truth)
+        except Exception:
+            from . import math_dapo
+
+            res = math_dapo.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "hardverify_math",
+        "textbook_reasoning",
+    ]:
+        # HERO paper hard-to-verify benchmarks.  During training these are scored
+        # with math_verify as a best-effort verifier; definitive evaluation uses
+        # GPT-4o as an LLM-as-judge (see examples/hero/eval_hero_llm_judge.py).
+        try:
+            from . import math_verify
+
+            res = math_verify.compute_score(solution_str, ground_truth)
+        except Exception:
+            from . import math_dapo
+
+            res = math_dapo.compute_score(solution_str, ground_truth)
     elif data_source in ["math_dapo", "math", "math_dapo_reasoning"] or data_source.startswith("aime"):
         from . import math_dapo
 

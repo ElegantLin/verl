@@ -25,30 +25,33 @@ eif_module = module_from_spec(eif_spec)
 eif_spec.loader.exec_module(eif_module)
 
 compute_one_step_scores = eif_module.compute_one_step_scores
+compute_algorithm1_scores = eif_module.compute_algorithm1_scores
 summarize_one_step_estimator = eif_module.summarize_one_step_estimator
 
 
-def test_one_step_scores_match_algorithm():
+def test_algorithm1_scores_match_paper_formula():
     primary = np.array([1.0, 0.0], dtype=np.float64)
-    tau = np.array(
-        [
-            [0.2, 0.6, 1.0],  # m_hat = (0.6 + 1.0) / 2 = 0.8 -> psi = 0.8 + 1.0 - 0.2 = 1.6
-            [0.7, 0.5, 0.1],  # m_hat = 0.3 -> psi = 0.3 + 0.0 - 0.7 = -0.4
-        ],
-        dtype=np.float64,
-    )
-    scores = compute_one_step_scores(primary, tau)
+    tau = np.array([0.2, 0.7], dtype=np.float64)
+    m = np.array([0.8, 0.3], dtype=np.float64)
+
+    scores = compute_algorithm1_scores(primary, tau, m)
+    np.testing.assert_allclose(scores, np.array([1.6, -0.4], dtype=np.float64), atol=1e-6)
+
+
+def test_one_step_scores_match_algorithm1_formula():
+    primary = np.array([1.0, 0.0], dtype=np.float64)
+    tau = np.array([0.2, 0.7], dtype=np.float64)
+    m = np.array([0.8, 0.3], dtype=np.float64)
+
+    scores = compute_one_step_scores(primary_scores=primary, tau_scores=tau, m_scores=m)
     np.testing.assert_allclose(scores, np.array([1.6, -0.4], dtype=np.float64), atol=1e-6)
 
 
 def test_one_step_summary_fields():
     summary = summarize_one_step_estimator(
         primary_scores=[1.0, 0.0, 1.0],
-        tau_samples=[
-            [0.2, 0.4, 0.6],
-            [0.8, 0.7, 0.9],
-            [0.3, 0.5, 0.7],
-        ],
+        tau_scores=[0.2, 0.8, 0.3],
+        m_scores=[0.5, 0.4, 0.6],
     )
     for key in ["theta_naive", "theta_one_step_eif", "var_naive", "var_one_step_eif", "var_reduction"]:
         assert key in summary
@@ -56,7 +59,18 @@ def test_one_step_summary_fields():
 
 def test_one_step_input_validation():
     with pytest.raises(ValueError):
-        compute_one_step_scores(primary_scores=[1.0], tau_samples=[[0.2]])
+        compute_one_step_scores(primary_scores=[1.0], tau_scores=[[0.2]], m_scores=[0.4])
 
     with pytest.raises(ValueError):
-        compute_one_step_scores(primary_scores=[1.0, 0.0], tau_samples=[[0.2, 0.3]])
+        compute_one_step_scores(primary_scores=[1.0, 0.0], tau_scores=[0.2, 0.3], m_scores=[[0.4, 0.5]])
+
+    with pytest.raises(ValueError):
+        compute_algorithm1_scores(primary_scores=[1.0, 0.0], tau_scores=[0.2], m_scores=[0.4, 0.5])
+
+
+def test_one_step_summary_requires_explicit_m_scores():
+    with pytest.raises(TypeError):
+        summarize_one_step_estimator(
+            primary_scores=[1.0, 0.0],
+            tau_scores=[0.2, 0.7],
+        )

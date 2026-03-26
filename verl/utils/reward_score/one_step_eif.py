@@ -17,48 +17,56 @@ from __future__ import annotations
 import numpy as np
 
 
-def _validate_inputs(
-    primary_scores: np.ndarray | list[float], tau_samples: np.ndarray | list[list[float]]
-) -> tuple[np.ndarray, np.ndarray]:
+def _validate_algorithm1_inputs(
+    primary_scores: np.ndarray | list[float],
+    tau_scores: np.ndarray | list[float],
+    m_scores: np.ndarray | list[float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     primary = np.asarray(primary_scores, dtype=np.float64)
-    tau = np.asarray(tau_samples, dtype=np.float64)
+    tau = np.asarray(tau_scores, dtype=np.float64)
+    m = np.asarray(m_scores, dtype=np.float64)
 
     if primary.ndim != 1:
         raise ValueError(f"primary_scores must be 1D, but got shape={primary.shape}")
-    if tau.ndim != 2:
-        raise ValueError(f"tau_samples must be 2D with shape [N, M+1], but got shape={tau.shape}")
-    if tau.shape[0] != primary.shape[0]:
+    if tau.ndim != 1:
+        raise ValueError(f"tau_scores must be 1D, but got shape={tau.shape}")
+    if m.ndim != 1:
+        raise ValueError(f"m_scores must be 1D, but got shape={m.shape}")
+    if tau.shape[0] != primary.shape[0] or m.shape[0] != primary.shape[0]:
         raise ValueError(
-            f"tau_samples and primary_scores must align on N. Got {tau.shape[0]=} and {primary.shape[0]=}."
+            "primary_scores, tau_scores, and m_scores must align on N. "
+            f"Got {primary.shape[0]=}, {tau.shape[0]=}, {m.shape[0]=}."
         )
-    if tau.shape[1] < 2:
-        raise ValueError(
-            "tau_samples must contain at least M+1=2 values per instance "
-            "(one control term + at least one Monte Carlo sample)."
-        )
-    return primary, tau
+    return primary, tau, m
+
+
+def compute_algorithm1_scores(
+    primary_scores: np.ndarray | list[float],
+    tau_scores: np.ndarray | list[float],
+    m_scores: np.ndarray | list[float],
+) -> np.ndarray:
+    """Compute the literal Algorithm 1 score psi_i = m_i + phi_i - tau_i."""
+    primary, tau, m = _validate_algorithm1_inputs(primary_scores, tau_scores, m_scores)
+    return (m + primary - tau).astype(np.float64)
 
 
 def compute_one_step_scores(
-    primary_scores: np.ndarray | list[float], tau_samples: np.ndarray | list[list[float]]
+    primary_scores: np.ndarray | list[float],
+    tau_scores: np.ndarray | list[float],
+    m_scores: np.ndarray | list[float],
 ) -> np.ndarray:
-    """Compute one-step EIF aggregated scores from Algorithm 1.
-
-    For each instance i:
-      m_hat_i = mean(tau(x_i, y_i, r_{i,2..M+1}))
-      psi_hat_i = m_hat_i + phi_i - tau(x_i, y_i, r_{i,1})
-    """
-    primary, tau = _validate_inputs(primary_scores, tau_samples)
-    m_hat = np.mean(tau[:, 1:], axis=1)
-    return (m_hat + primary - tau[:, 0]).astype(np.float64)
+    """Compute one-step EIF scores from Algorithm 1."""
+    return compute_algorithm1_scores(primary_scores, tau_scores, m_scores)
 
 
 def summarize_one_step_estimator(
-    primary_scores: np.ndarray | list[float], tau_samples: np.ndarray | list[list[float]]
+    primary_scores: np.ndarray | list[float],
+    tau_scores: np.ndarray | list[float],
+    m_scores: np.ndarray | list[float],
 ) -> dict[str, float]:
     """Return naive vs one-step EIF summary statistics."""
-    primary, tau = _validate_inputs(primary_scores, tau_samples)
-    one_step_scores = compute_one_step_scores(primary, tau)
+    primary = np.asarray(primary_scores, dtype=np.float64)
+    one_step_scores = compute_one_step_scores(primary, tau_scores, m_scores)
     n = primary.shape[0]
     ddof = 1 if n > 1 else 0
     naive_var = float(np.var(primary, ddof=ddof))

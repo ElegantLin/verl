@@ -31,12 +31,13 @@ from verl.utils import hf_tokenizer
 from verl.utils.fs import copy_to_local
 from verl.utils.reward_score.hero import apply_hero_shaping
 from verl.utils.reward_score.hybrid_reward_eif import (
-    AuxRewardScorer,
+    AceMathRewardScorer,
+    MarginalLLMScorer,
     TauLLMScorer,
-    compute_response_online_eif,
+    compute_response_algorithm1_eif,
     extract_question_text,
 )
-from verl.utils.reward_score.one_step_eif import compute_one_step_scores
+from verl.utils.reward_score.one_step_eif import compute_algorithm1_scores
 
 from .reward_model import RewardModelManager
 
@@ -44,42 +45,38 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
-def _normalize_hybrid_eif_tau_row(value, *, aux_tau_key: str) -> np.ndarray:
+
+def _normalize_hybrid_eif_scalar(value, *, key: str) -> float:
     if isinstance(value, torch.Tensor):
-        tau_row = value.detach().cpu().numpy()
+        scalar = value.detach().cpu().numpy()
     else:
-        if hasattr(value, "tolist") and not isinstance(value, str):
+        if hasattr(value, 'tolist') and not isinstance(value, str):
             value = value.tolist()
-        tau_row = np.asarray(value, dtype=np.float64)
+        scalar = np.asarray(value, dtype=np.float64)
 
-    if tau_row.ndim != 1:
-        raise ValueError(f"`{aux_tau_key}` must contain 1D tau rows, but got shape={tau_row.shape}.")
-    if tau_row.shape[0] < 2:
-        raise ValueError(f"`{aux_tau_key}` must contain at least 2 tau values per sample, got {tau_row.shape[0]}.")
-    return tau_row.astype(np.float64, copy=False)
+    if scalar.ndim == 0:
+        return float(scalar)
+    if scalar.ndim == 1 and scalar.shape[0] == 1:
+        return float(scalar[0])
+    raise ValueError(f'`{key}` must contain scalar values, but got shape={scalar.shape}.')
 
 
-def _load_hybrid_eif_tau_samples(data: DataProto, *, aux_tau_key: str) -> np.ndarray:
-    if data.batch is not None and aux_tau_key in data.batch.keys():
-        tau_samples = data.batch[aux_tau_key]
-        if isinstance(tau_samples, torch.Tensor):
-            tau_samples = tau_samples.detach().cpu().numpy()
-        tau_samples = np.asarray(tau_samples, dtype=np.float64)
-        if tau_samples.ndim != 2:
-            raise ValueError(f"`{aux_tau_key}` in batch must be 2D with shape [N, M+1], got {tau_samples.shape}.")
-        if tau_samples.shape[1] < 2:
-            raise ValueError(f"`{aux_tau_key}` in batch must contain at least 2 tau values, got {tau_samples.shape[1]}.")
-        return tau_samples
+def _load_hybrid_eif_scalar_values(data: DataProto, *, key: str) -> np.ndarray:
+    if data.batch is not None and key in data.batch.keys():
+        values = data.batch[key]
+        if isinstance(values, torch.Tensor):
+            values = values.detach().cpu().numpy()
+        values = np.asarray(values, dtype=np.float64)
+        if values.ndim == 1:
+            return values.astype(np.float64, copy=False)
+        if values.ndim == 2 and values.shape[1] == 1:
+            return values[:, 0].astype(np.float64, copy=False)
+        raise ValueError(f'`{key}` in batch must be 1D scalar-aligned values, got shape={values.shape}.')
 
-    if data.non_tensor_batch is not None and aux_tau_key in data.non_tensor_batch:
-        tau_rows = [
-            _normalize_hybrid_eif_tau_row(value, aux_tau_key=aux_tau_key) for value in data.non_tensor_batch[aux_tau_key]
-        ]
-        return np.stack(tau_rows, axis=0)
+    if data.non_tensor_batch is not None and key in data.non_tensor_batch:
+        return np.asarray([_normalize_hybrid_eif_scalar(value, key=key) for value in data.non_tensor_batch[key]])
 
-    raise KeyError(
-        f"`reward.reward_manager.name=hybrid_eif` requires `{aux_tau_key}` in batch or non_tensor_batch."
-    )
+    raise KeyError(f'`reward.reward_manager.name=hybrid_eif` requires `{key}` in batch or non_tensor_batch.')
 
 
 def migrate_legacy_reward_impl(config):
@@ -352,8 +349,9 @@ class RewardLoopManager:
         self.config = config
         self._hero_sigma_bar: float | None = None
         self._hybrid_eif_online_input_tokenizer = None
-        self._hybrid_eif_online_aux_scorer: AuxRewardScorer | None = None
+        self._hybrid_eif_online_aux_scorer: AceMathRewardScorer | None = None
         self._hybrid_eif_online_tau_scorer: TauLLMScorer | None = None
+        self._hybrid_eif_online_m_scorer: MarginalLLMScorer | None = None
         if self.config.reward.reward_model.enable:
             self.reward_model_manager = RewardModelManager(config.reward.reward_model, rm_resource_pool)
             self.reward_router_address = self.reward_model_manager.get_router_address()
@@ -389,24 +387,38 @@ class RewardLoopManager:
             self._hybrid_eif_online_input_tokenizer = hf_tokenizer(input_tokenizer_local_path, trust_remote_code=True)
 
         cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif_online", {})
+        if self.reward_model_manager is None or self.reward_router_address is None:
+            raise ValueError(
+                'hybrid_eif_online requires reward.reward_model.enable=True so AceMath-7B-RM can provide r_i.'
+            )
+
         if self._hybrid_eif_online_aux_scorer is None:
-            self._hybrid_eif_online_aux_scorer = AuxRewardScorer(
-                model=str(cfg.get("aux_model", "Qwen/Qwen2.5-7B-Instruct")),
-                base_url=str(cfg.get("aux_base_url", "http://localhost:8000/v1")),
-                api_key_env=str(cfg.get("aux_api_key_env", "OPENAI_API_KEY")),
-                temperature=float(cfg.get("aux_temperature", 1.0)),
-                max_tokens=int(cfg.get("aux_max_tokens", 16)),
+            self._hybrid_eif_online_aux_scorer = AceMathRewardScorer(
+                model=str(self.config.reward.reward_model.model_path),
+                base_url=str(self.reward_router_address),
+                engine_name=str(self.config.reward.reward_model.rollout.name),
+                reward_model_tokenizer=self.reward_model_manager.tokenizer,
                 timeout=float(cfg.get("aux_timeout", 300.0)),
             )
 
         if self._hybrid_eif_online_tau_scorer is None:
             self._hybrid_eif_online_tau_scorer = TauLLMScorer(
-                model=str(cfg.get("tau_model", "Qwen/Qwen2.5-7B-Instruct")),
+                model=str(cfg.get("tau_model", "Qwen/Qwen3.5-397B-A17B-FP8")),
                 base_url=str(cfg.get("tau_base_url", "http://localhost:8000/v1")),
                 api_key_env=str(cfg.get("tau_api_key_env", "OPENAI_API_KEY")),
                 temperature=float(cfg.get("tau_temperature", 0.0)),
                 max_tokens=int(cfg.get("tau_max_tokens", 16)),
                 timeout=float(cfg.get("tau_timeout", 300.0)),
+            )
+
+        if self._hybrid_eif_online_m_scorer is None:
+            self._hybrid_eif_online_m_scorer = MarginalLLMScorer(
+                model=str(cfg.get("m_model", cfg.get("tau_model", "Qwen/Qwen3.5-397B-A17B-FP8"))),
+                base_url=str(cfg.get("m_base_url", cfg.get("tau_base_url", "http://localhost:8000/v1"))),
+                api_key_env=str(cfg.get("m_api_key_env", cfg.get("tau_api_key_env", "OPENAI_API_KEY"))),
+                temperature=float(cfg.get("m_temperature", 0.0)),
+                max_tokens=int(cfg.get("m_max_tokens", 16)),
+                timeout=float(cfg.get("m_timeout", 300.0)),
             )
 
     def _decode_response_texts(self, data: DataProto) -> list[str]:
@@ -428,11 +440,9 @@ class RewardLoopManager:
         self._init_hybrid_eif_online_components()
         cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif_online", {})
         fail_open_to_phi = bool(cfg.get("fail_open_to_phi", True))
-        num_aux_samples = int(cfg.get("num_aux_samples", 2))
-        if num_aux_samples < 2:
-            raise ValueError(f"`hybrid_eif_online.num_aux_samples` must be >= 2, got {num_aux_samples}.")
         aux_concurrency = int(cfg.get("aux_concurrency", 32))
         tau_concurrency = int(cfg.get("tau_concurrency", 128))
+        m_concurrency = int(cfg.get("m_concurrency", tau_concurrency))
 
         decoded_responses = self._decode_response_texts(data)
         raw_prompts = data.non_tensor_batch.get("raw_prompt", np.array([None] * len(data), dtype=object))
@@ -440,26 +450,28 @@ class RewardLoopManager:
 
         aux_semaphore = asyncio.Semaphore(aux_concurrency) if aux_concurrency > 0 else None
         tau_semaphore = asyncio.Semaphore(tau_concurrency) if tau_concurrency > 0 else None
+        m_semaphore = asyncio.Semaphore(m_concurrency) if m_concurrency > 0 else None
 
         aux_scorer = self._hybrid_eif_online_aux_scorer
         tau_scorer = self._hybrid_eif_online_tau_scorer
-        assert aux_scorer is not None and tau_scorer is not None
+        m_scorer = self._hybrid_eif_online_m_scorer
+        assert aux_scorer is not None and tau_scorer is not None and m_scorer is not None
 
-        async def _score_row(sample_idx: int, *, aux_session, tau_session) -> dict[str, Any]:
+        async def _score_row(sample_idx: int, *, aux_session) -> dict[str, Any]:
             try:
                 question = extract_question_text(raw_prompts[sample_idx], extra_info=extra_infos[sample_idx])
-                result = await compute_response_online_eif(
+                result = await compute_response_algorithm1_eif(
                     question=question,
                     response=decoded_responses[sample_idx],
                     phi_score=float(scores[sample_idx]),
                     aux_scorer=aux_scorer,
                     tau_scorer=tau_scorer,
+                    m_scorer=m_scorer,
                     raw_prompt=raw_prompts[sample_idx],
-                    num_aux_samples=num_aux_samples,
                     aux_session=aux_session,
-                    tau_session=tau_session,
                     aux_semaphore=aux_semaphore,
                     tau_semaphore=tau_semaphore,
+                    m_semaphore=m_semaphore,
                 )
                 return {"ok": True, "result": result}
             except Exception as exc:  # pragma: no cover - exercised by integration paths.
@@ -467,15 +479,10 @@ class RewardLoopManager:
 
         async def _run_row_scoring() -> list[dict[str, Any]]:
             aux_timeout = aiohttp.ClientTimeout(total=aux_scorer.timeout)
-            tau_timeout = aiohttp.ClientTimeout(total=tau_scorer.timeout)
             aux_connector = aiohttp.TCPConnector(limit=0)
-            tau_connector = aiohttp.TCPConnector(limit=0)
-            async with (
-                aiohttp.ClientSession(timeout=aux_timeout, connector=aux_connector) as aux_session,
-                aiohttp.ClientSession(timeout=tau_timeout, connector=tau_connector) as tau_session,
-            ):
+            async with aiohttp.ClientSession(timeout=aux_timeout, connector=aux_connector) as aux_session:
                 tasks = [
-                    _score_row(sample_idx, aux_session=aux_session, tau_session=tau_session)
+                    _score_row(sample_idx, aux_session=aux_session)
                     for sample_idx in range(len(data))
                 ]
                 return list(await asyncio.gather(*tasks))
@@ -491,18 +498,13 @@ class RewardLoopManager:
                 row_result = result["result"]
                 final_scores[sample_idx] = row_result["score"]
                 diagnostics = row_result["diagnostics"]
-                tau_samples = row_result["tau_samples"]
-                aux_rewards = row_result["aux_rewards"]
 
                 info = reward_extra_infos[sample_idx]
                 phi_score = float(diagnostics["phi"])
                 info["hybrid_eif_online_phi"] = phi_score
-                info["hybrid_eif_online_tau_control"] = float(diagnostics["tau_control"])
-                info["hybrid_eif_online_tau_mc_mean"] = float(diagnostics["tau_mc_mean"])
-                info["hybrid_eif_online_num_aux_samples"] = int(diagnostics["num_aux_samples"])
-                info["hybrid_eif_online_primary_aux_reward"] = float(aux_rewards[0])
-                info["hybrid_eif_online_aux_reward_samples"] = tuple(float(x) for x in aux_rewards.tolist())
-                info["hybrid_eif_online_tau_samples"] = tuple(float(x) for x in tau_samples.tolist())
+                info["hybrid_eif_online_aux_reward"] = float(row_result["aux_reward"])
+                info["hybrid_eif_online_tau"] = float(diagnostics["tau"])
+                info["hybrid_eif_online_m"] = float(diagnostics["m"])
                 info["hybrid_eif_online_final_score"] = float(final_scores[sample_idx])
                 info["hybrid_eif_online_fallback"] = 0
                 info["hybrid_eif_online_error"] = None
@@ -579,20 +581,21 @@ class RewardLoopManager:
                 info.setdefault("acc", float(rule_scores[i]))
         elif self.config.reward.reward_manager.name == "hybrid_eif":
             hybrid_eif_cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif", {})
-            aux_tau_key = str(hybrid_eif_cfg.get("aux_tau_key", "aux_tau_values"))
             phi_scores = np.asarray(scores, dtype=np.float64)
-            tau_samples = _load_hybrid_eif_tau_samples(data, aux_tau_key=aux_tau_key)
-            tau_mc_mean = np.mean(tau_samples[:, 1:], axis=1)
-            eif_scores = compute_one_step_scores(phi_scores, tau_samples)
+            tau_key = str(hybrid_eif_cfg.get('tau_key', 'tau_llm_value'))
+            m_key = str(hybrid_eif_cfg.get('m_key', 'm_llm_value'))
+
+            tau_scores = _load_hybrid_eif_scalar_values(data, key=tau_key)
+            m_scores = _load_hybrid_eif_scalar_values(data, key=m_key)
+            eif_scores = compute_algorithm1_scores(phi_scores, tau_scores, m_scores)
             scores = eif_scores.tolist()
 
             for i, info in enumerate(reward_extra_infos):
-                info["hybrid_eif_phi"] = float(phi_scores[i])
-                info["hybrid_eif_tau_control"] = float(tau_samples[i, 0])
-                info["hybrid_eif_tau_mc_mean"] = float(tau_mc_mean[i])
-                info["hybrid_eif_num_aux_samples"] = int(tau_samples.shape[1] - 1)
-                info["hybrid_eif_final_score"] = float(scores[i])
-                info.setdefault("acc", float(phi_scores[i]))
+                info['hybrid_eif_phi'] = float(phi_scores[i])
+                info['hybrid_eif_tau'] = float(tau_scores[i])
+                info['hybrid_eif_m'] = float(m_scores[i])
+                info['hybrid_eif_final_score'] = float(scores[i])
+                info.setdefault('acc', float(phi_scores[i]))
         elif self.config.reward.reward_manager.name == "hybrid_eif_online":
             scores = self._apply_hybrid_eif_online(data, reward_extra_infos, scores)
 
