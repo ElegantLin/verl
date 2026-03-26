@@ -14,7 +14,7 @@
 """Normalize evaluation parquet for one-step EIF estimation (Hybrid_reward.pdf).
 
 NOTE: This is for evaluation with fixed (x_i, y_i) pairs only.
-During training, y_i changes with the policy — use hybrid_eif_online mode instead.
+During training, y_i changes with the policy; use hybrid_eif_online mode instead.
 """
 
 import argparse
@@ -23,20 +23,26 @@ from typing import Any
 
 import pandas as pd
 
+from verl.utils import hf_tokenizer
 from verl.utils.reward_score.hybrid_reward_eif import (
-    AuxRewardScorer,
+    AceMathRewardScorer,
+    MarginalLLMScorer,
     TauLLMScorer,
-    normalize_float_list,
-    normalize_string_list,
-    resolve_auxiliary_response_bundle,
+    extract_question_text,
+    select_primary_response,
 )
 
 
-def _parse_csv_arg(value: str | None) -> list[str] | None:
+def _normalize_float_scalar(value: Any, *, field_name: str) -> float:
     if value is None:
-        return None
-    parsed = [item.strip() for item in value.split(",") if item.strip()]
-    return parsed or None
+        raise ValueError(f"`{field_name}` is required but missing.")
+    if hasattr(value, "tolist") and not isinstance(value, str):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise ValueError(f"`{field_name}` must contain a single scalar value, got length={len(value)}.")
+        value = value[0]
+    return float(value)
 
 
 def _row_has_value(row: pd.Series, key: str) -> bool:
@@ -63,14 +69,6 @@ def _resolve_reward_model(row: pd.Series, reward_model_key: str, ground_truth_ke
     return {"style": "rule", "ground_truth": ground_truth}
 
 
-def _resolve_aux_response_value(row: pd.Series, aux_response_key: str | None, aux_response_cols: list[str] | None):
-    if aux_response_cols:
-        return [row[col] for col in aux_response_cols]
-    if aux_response_key and _row_has_value(row, aux_response_key):
-        return row[aux_response_key]
-    return None
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", required=True, help="Input parquet path.")
@@ -81,43 +79,30 @@ def main():
     parser.add_argument("--reward_model_key", default="reward_model")
     parser.add_argument("--ground_truth_key", default="ground_truth")
     parser.add_argument("--primary_response_index", type=int, default=0)
-    parser.add_argument("--num_aux_samples", type=int, default=None, help="Optional truncation length for M+1 samples.")
-    parser.add_argument(
-        "--exclude_primary_from_aux",
-        action="store_true",
-        help="If set, exclude the designated primary response from the fallback auxiliary response bundle.",
-    )
-    parser.add_argument(
-        "--aux_response_key",
-        default=None,
-        help="Optional list-like column with auxiliary responses. If omitted, a list-valued response column is reused.",
-    )
-    parser.add_argument(
-        "--aux_response_cols",
-        default=None,
-        help="Optional comma-separated scalar columns to combine into an auxiliary response list.",
-    )
-    parser.add_argument("--aux_reward_key", default="aux_reward_values")
-    parser.add_argument("--aux_tau_key", default="aux_tau_values")
-    parser.add_argument(
-        "--aux_cols",
-        default=None,
-        help="Optional comma-separated scalar columns to combine into aux tau list. "
-        "If provided, overrides --aux_tau_key.",
-    )
-    # Auxiliary reward model (r_ij generator)
-    parser.add_argument("--aux_model", default="Qwen/Qwen2.5-7B-Instruct")
-    parser.add_argument("--aux_base_url", default="http://localhost:8000/v1")
-    parser.add_argument("--aux_api_key_env", default="OPENAI_API_KEY")
-    parser.add_argument("--aux_temperature", type=float, default=1.0)
-    parser.add_argument("--aux_max_tokens", type=int, default=16)
-    # Tau LLM
-    parser.add_argument("--tau_model", default="Qwen/Qwen2.5-32B-Instruct")
-    parser.add_argument("--tau_base_url", default="http://localhost:8001/v1")
+    parser.add_argument("--aux_reward_key", default="aux_reward_value")
+    parser.add_argument("--tau_key", default="tau_llm_value")
+    parser.add_argument("--m_key", default="m_llm_value")
+    # AceMath reward model for r_i.
+    parser.add_argument("--reward_model_path", default="nvidia/AceMath-7B-RM")
+    parser.add_argument("--reward_base_url", default="http://localhost:8000")
+    parser.add_argument("--reward_engine_name", default="vllm")
+    parser.add_argument("--reward_model_tokenizer_path", default=None)
+    parser.add_argument("--reward_timeout", type=float, default=300.0)
+    # tau_LLM
+    parser.add_argument("--tau_model", default="qwen3")
+    parser.add_argument("--tau_base_url", default="https://ellm.nrp-nautilus.io/v1")
     parser.add_argument("--tau_api_key_env", default="OPENAI_API_KEY")
     parser.add_argument("--tau_temperature", type=float, default=0.0)
     parser.add_argument("--tau_max_tokens", type=int, default=16)
+    # m_LLM
+    parser.add_argument("--m_model", default="qwen3")
+    parser.add_argument("--m_base_url", default=None)
+    parser.add_argument("--m_api_key_env", default="OPENAI_API_KEY")
+    parser.add_argument("--m_temperature", type=float, default=0.0)
+    parser.add_argument("--m_max_tokens", type=int, default=16)
     args = parser.parse_args()
+    if args.m_base_url is None:
+        args.m_base_url = args.tau_base_url
 
     df = pd.read_parquet(os.path.expanduser(args.input_path))
 
@@ -131,91 +116,78 @@ def main():
             f"Either `{args.reward_model_key}` (dict with ground_truth) or `{args.ground_truth_key}` must exist."
         )
 
-    aux_cols = _parse_csv_arg(args.aux_cols)
-    aux_response_cols = _parse_csv_arg(args.aux_response_cols)
-
-    if aux_cols:
-        missing_aux_cols = [col for col in aux_cols if col not in df.columns]
-        if missing_aux_cols:
-            raise ValueError(f"Missing aux tau columns: {missing_aux_cols}")
-    if aux_response_cols:
-        missing_aux_response_cols = [col for col in aux_response_cols if col not in df.columns]
-        if missing_aux_response_cols:
-            raise ValueError(f"Missing auxiliary response columns: {missing_aux_response_cols}")
-    if args.aux_response_key and args.aux_response_key not in df.columns:
-        raise ValueError(f"Missing auxiliary response column `{args.aux_response_key}`.")
-
-    aux_scorer = None
+    ace_scorer = None
     tau_scorer = None
+    m_scorer = None
 
     normalized_rows = []
     for _, row in df.iterrows():
         reward_model = _resolve_reward_model(row, args.reward_model_key, args.ground_truth_key)
-        question = str(row[args.prompt_key])
-        aux_response_value = _resolve_aux_response_value(row, args.aux_response_key, aux_response_cols)
-        response_values = normalize_string_list(row[args.response_key], field_name=args.response_key)
-        primary_response, aux_responses = resolve_auxiliary_response_bundle(
-            row[args.response_key],
-            primary_response_index=args.primary_response_index,
-            aux_response_value=aux_response_value,
-            include_primary_response=not args.exclude_primary_from_aux,
-            max_aux_samples=args.num_aux_samples,
-        )
-        has_explicit_aux_bundle = aux_response_value is not None or len(response_values) > 1
-        aux_reward_values: list[float] | None = None
+        raw_prompt = row[args.prompt_key]
+        question = extract_question_text(raw_prompt, fallback=row[args.prompt_key])
+        primary_response = select_primary_response(row[args.response_key], primary_response_index=args.primary_response_index)
 
-        if aux_cols:
-            aux_tau_values = normalize_float_list([row[col] for col in aux_cols], field_name="aux_cols")
-        elif _row_has_value(row, args.aux_tau_key):
-            aux_tau_values = normalize_float_list(row[args.aux_tau_key], field_name=args.aux_tau_key)
-        else:
-            if _row_has_value(row, args.aux_reward_key):
-                aux_reward_values = normalize_float_list(row[args.aux_reward_key], field_name=args.aux_reward_key)
-            else:
-                if not aux_responses:
-                    raise ValueError(
-                        "Missing auxiliary rewards and auxiliary responses for a row. "
-                        "Provide aux tau values, aux reward values, or an auxiliary response bundle."
-                    )
-                if aux_scorer is None:
-                    aux_scorer = AuxRewardScorer(
-                        model=args.aux_model,
-                        base_url=args.aux_base_url,
-                        api_key_env=args.aux_api_key_env,
-                        temperature=args.aux_temperature,
-                        max_tokens=args.aux_max_tokens,
-                    )
-                if has_explicit_aux_bundle:
-                    reward_inputs = aux_responses
-                else:
-                    if args.num_aux_samples is None:
-                        raise ValueError(
-                            "Repeated auxiliary reward sampling for a single response requires --num_aux_samples >= 2."
-                        )
-                    reward_inputs = [primary_response] * args.num_aux_samples
-                aux_reward_values = aux_scorer.score_many(question, reward_inputs)
-            if tau_scorer is None:
-                tau_scorer = TauLLMScorer(
-                    model=args.tau_model,
-                    base_url=args.tau_base_url,
-                    api_key_env=args.tau_api_key_env,
-                    temperature=args.tau_temperature,
-                    max_tokens=args.tau_max_tokens,
+        if _row_has_value(row, args.tau_key) or _row_has_value(row, args.m_key):
+            if not _row_has_value(row, args.tau_key) or not _row_has_value(row, args.m_key):
+                raise ValueError(
+                    f"Rows must provide both `{args.tau_key}` and `{args.m_key}` when either one is present."
                 )
-            aux_tau_values = tau_scorer.score_many(question, primary_response, aux_reward_values)
+            aux_reward_value = (
+                _normalize_float_scalar(row[args.aux_reward_key], field_name=args.aux_reward_key)
+                if _row_has_value(row, args.aux_reward_key)
+                else None
+            )
+            tau_value = _normalize_float_scalar(row[args.tau_key], field_name=args.tau_key)
+            m_value = _normalize_float_scalar(row[args.m_key], field_name=args.m_key)
+            normalized_row = {
+                "prompt": question,
+                "responses": [primary_response],
+                "data_source": row[args.data_source_key],
+                "reward_model": reward_model,
+                args.tau_key: tau_value,
+                args.m_key: m_value,
+            }
+            if aux_reward_value is not None:
+                normalized_row[args.aux_reward_key] = aux_reward_value
+            normalized_rows.append(normalized_row)
+            continue
 
-        if aux_reward_values is None and _row_has_value(row, args.aux_reward_key):
-            aux_reward_values = normalize_float_list(row[args.aux_reward_key], field_name=args.aux_reward_key)
-        elif aux_reward_values is None:
-            aux_reward_values = []
+        if _row_has_value(row, args.aux_reward_key):
+            aux_reward_value = _normalize_float_scalar(row[args.aux_reward_key], field_name=args.aux_reward_key)
+        else:
+            if ace_scorer is None:
+                reward_model_tokenizer = hf_tokenizer(
+                    args.reward_model_tokenizer_path or args.reward_model_path,
+                    trust_remote_code=True,
+                )
+                ace_scorer = AceMathRewardScorer(
+                    model=args.reward_model_path,
+                    base_url=args.reward_base_url,
+                    engine_name=args.reward_engine_name,
+                    reward_model_tokenizer=reward_model_tokenizer,
+                    timeout=args.reward_timeout,
+                )
+            aux_reward_value = ace_scorer.score(question, primary_response, raw_prompt=raw_prompt)
 
-        if args.num_aux_samples is not None:
-            aux_tau_values = aux_tau_values[: args.num_aux_samples]
-            aux_reward_values = aux_reward_values[: args.num_aux_samples]
+        if tau_scorer is None:
+            tau_scorer = TauLLMScorer(
+                model=args.tau_model,
+                base_url=args.tau_base_url,
+                api_key_env=args.tau_api_key_env,
+                temperature=args.tau_temperature,
+                max_tokens=args.tau_max_tokens,
+            )
+        if m_scorer is None:
+            m_scorer = MarginalLLMScorer(
+                model=args.m_model,
+                base_url=args.m_base_url,
+                api_key_env=args.m_api_key_env,
+                temperature=args.m_temperature,
+                max_tokens=args.m_max_tokens,
+            )
 
-        aux_tau_values = normalize_float_list(aux_tau_values, field_name="aux_tau_values")
-        if aux_reward_values:
-            aux_reward_values = normalize_float_list(aux_reward_values, field_name="aux_reward_values")
+        tau_value = tau_scorer.score(question, primary_response, aux_reward_value)
+        m_value = m_scorer.score(question, primary_response)
 
         normalized_rows.append(
             {
@@ -223,8 +195,9 @@ def main():
                 "responses": [primary_response],
                 "data_source": row[args.data_source_key],
                 "reward_model": reward_model,
-                "aux_reward_values": aux_reward_values,
-                "aux_tau_values": aux_tau_values,
+                args.aux_reward_key: float(aux_reward_value),
+                args.tau_key: float(tau_value),
+                args.m_key: float(m_value),
             }
         )
 

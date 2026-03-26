@@ -18,12 +18,16 @@ For each instance `i`, with:
 - question `x_i`
 - primary policy response `y_i`
 - binary verifier reward `phi_i`
-- auxiliary dense rewards `r_{i1..M+1}` from AceMath-7B
+- one auxiliary dense reward `r_i` from AceMath-7B-RM
 
 the repo computes:
-- `tau_{i,j} = tau_LLM(x_i, y_i, r_ij)`
-- `m_hat_i = (1/M) * sum_{j=2..M+1} tau_{i,j}`
-- `psi_hat_i = m_hat_i + phi_i - tau_{i,1}`
+- `tau_i = tau_LLM(x_i, y_i, r_i)`
+- `m_i = m_LLM(x_i, y_i)`
+- `psi_hat_i = m_i + phi_i - tau_i`
+
+Legacy Monte Carlo compatibility is still available when precomputed `aux_tau_values`
+are present, but the primary `hybrid_eif` / `hybrid_eif_online` path now follows the
+literal Algorithm 1 from `Hybrid_reward.pdf`.
 
 Implemented in:
 - `verl/utils/reward_score/one_step_eif.py`
@@ -31,20 +35,13 @@ Implemented in:
 
 ## Auxiliary Signal Generation
 
-The repo now supports two practical ways to construct the auxiliary rewards:
+The primary Algorithm 1 path scores each fixed `(x_i, y_i)` once with AceMath-7B-RM
+to obtain one dense auxiliary reward `r_i`. Then:
 
-1. Default repeated-sampling mode:
-   - fix one `(x_i, y_i)`
-   - query AceMath-7B-RM on the same response `M+1` times to obtain `r_{i1..M+1}`
-2. Compatibility mode:
-   - provide an auxiliary response bundle
-   - score each auxiliary response with AceMath-7B-RM to obtain `r_{i1..M+1}`
+1. query `tau_LLM(question, response, r_i)` to obtain `tau_i`
+2. query `m_LLM(question, response)` to obtain `m_i`
 
-Then query a fixed LLM (`tau_LLM`) on `(question, response, ace_reward)` to obtain
-`tau_{i,j}`.
-
-AceMath-7B scoring reuses the same discriminative RM request format used by HERO, with
-optional reward-side sampling kwargs forwarded to the reward endpoint.
+AceMath-7B scoring reuses the same discriminative RM request format used by HERO.
 
 The helper / preprocessing entrypoint is:
 - `examples/data_preprocess/hybrid_reward_eif_eval.py`
@@ -57,7 +54,8 @@ Enable in eval config:
 
 ```yaml
 data:
-  aux_tau_key: aux_tau_values
+  tau_key: tau_llm_value
+  m_key: m_llm_value
 
 one_step_eif:
   enable: true
@@ -67,10 +65,11 @@ one_step_eif:
 The normalized parquet row should contain:
 - standard eval fields (`responses`, `data_source`, `reward_model.ground_truth`)
 - `responses`: only the designated primary response `y_i`
-- `aux_tau_values`: list of floats with length `M+1` (`>= 2`)
+- `tau_llm_value`: scalar `tau_LLM(x_i, y_i, r_i)`
+- `m_llm_value`: scalar `m_LLM(x_i, y_i)`
 
 Optional diagnostics:
-- `aux_reward_values`: list of AceMath-7B dense rewards aligned with `aux_tau_values`
+- `aux_reward_value`: scalar AceMath-7B dense reward `r_i`
 
 ## Training-Time Reward Integration
 
@@ -88,18 +87,17 @@ reward:
       aux_tau_key: aux_tau_values
 ```
 
-Each training sample must provide `aux_tau_values` either in `DataProto.batch`
-as a tensor of shape `[M+1]` or in `DataProto.non_tensor_batch` as a list-like
-object. The reward loop computes:
+Each training sample may provide precomputed scalar `tau_llm_value` and
+`m_llm_value`; otherwise the online path computes them from AceMath-7B-RM plus the
+configured tau/m LLM endpoints. The reward loop computes:
 
 - `phi`: verifier score from the configured rule reward
-- `hybrid_eif_final_score = mean(aux_tau_values[1:]) + phi - aux_tau_values[0]`
+- `hybrid_eif_final_score = m_llm_value + phi - tau_llm_value`
 
 Logged reward diagnostics include:
 - `hybrid_eif_phi`
-- `hybrid_eif_tau_control`
-- `hybrid_eif_tau_mc_mean`
-- `hybrid_eif_num_aux_samples`
+- `hybrid_eif_tau`
+- `hybrid_eif_m`
 - `hybrid_eif_final_score`
 
 ## Preprocessing Modes

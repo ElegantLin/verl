@@ -30,18 +30,22 @@ from verl.trainer.ppo.reward import get_custom_reward_fn
 from verl.utils.fs import copy_to_local
 from verl.utils.reward_score.hybrid_reward_eif import select_primary_response
 from verl.utils.reward_score import default_compute_score
-from verl.utils.reward_score.one_step_eif import compute_one_step_scores, summarize_one_step_estimator
+from verl.utils.reward_score.one_step_eif import compute_algorithm1_scores, summarize_one_step_estimator
 
 
 @ray.remote
-def process_item(config, data_source, response_item, reward_data, aux_tau_values=None):
+def process_item(config, data_source, response_item, reward_data, tau_value=None, m_value=None):
     reward_fn = get_custom_reward_fn(config) or default_compute_score
     ground_truth = reward_data["ground_truth"]
     one_step_cfg = config.get("one_step_eif", {})
     one_step_enabled = one_step_cfg.get("enable", False)
-    primary_response_index = int(one_step_cfg.get("primary_response_index", 0))
-
     if one_step_enabled:
+        primary_response_index = int(one_step_cfg.get("primary_response_index", 0))
+    else:
+        configured_primary_index = config.data.get("primary_response_index", None)
+        primary_response_index = None if configured_primary_index is None else int(configured_primary_index)
+
+    if primary_response_index is not None:
         response_lst = [select_primary_response(response_item, primary_response_index=primary_response_index)]
     elif isinstance(response_item, list):
         response_lst = response_item
@@ -60,15 +64,16 @@ def process_item(config, data_source, response_item, reward_data, aux_tau_values
     }
 
     if one_step_enabled:
-        if aux_tau_values is None:
-            raise ValueError("one_step_eif is enabled but auxiliary tau values are missing for a row.")
         primary_score = score_lst[0]
-        eif_score = compute_one_step_scores([primary_score], [aux_tau_values])[0]
+        if tau_value is None or m_value is None:
+            raise ValueError("one_step_eif requires both tau and m for every row.")
+        eif_score = compute_algorithm1_scores([primary_score], [tau_value], [m_value])[0]
         result.update(
             {
                 "primary_score": float(primary_score),
                 "one_step_eif_score": float(eif_score),
-                "aux_tau_values": list(aux_tau_values),
+                "tau_llm_value": float(tau_value),
+                "m_llm_value": float(m_value),
             }
         )
     return result
@@ -82,16 +87,19 @@ def main(config):
     data_sources = dataset[config.data.data_source_key]
     reward_model_data = dataset[config.data.reward_model_key]
     one_step_eif_enable = config.get("one_step_eif", {}).get("enable", False)
-    aux_tau_key = config.data.get("aux_tau_key", None)
-    aux_tau_values = [None] * len(dataset)
+    tau_key = config.data.get("tau_key", None)
+    m_key = config.data.get("m_key", None)
+    tau_values = [None] * len(dataset)
+    m_values = [None] * len(dataset)
     if one_step_eif_enable:
-        if aux_tau_key is None:
-            raise ValueError("one_step_eif is enabled, but data.aux_tau_key is not configured.")
-        if aux_tau_key not in dataset.columns:
+        if tau_key is None or m_key is None:
+            raise ValueError("one_step_eif is enabled, but data.tau_key and data.m_key must both be configured.")
+        if tau_key not in dataset.columns or m_key not in dataset.columns:
             raise ValueError(
-                f"one_step_eif is enabled, but aux_tau_key `{aux_tau_key}` is missing from dataset columns."
+                f"one_step_eif is enabled, but required columns `{tau_key}` and `{m_key}` are missing from dataset columns."
             )
-        aux_tau_values = dataset[aux_tau_key]
+        tau_values = dataset[tau_key]
+        m_values = dataset[m_key]
 
     total = len(dataset)
 
@@ -103,10 +111,19 @@ def main(config):
     data_source_reward = defaultdict(list)
     data_source_eif = defaultdict(list)
     data_source_primary = defaultdict(list)
-    data_source_aux_tau = defaultdict(list)
+    data_source_tau = defaultdict(list)
+    data_source_m = defaultdict(list)
     # Create remote tasks
     remote_tasks = [
-        process_item.remote(config, data_sources[i], responses[i], reward_model_data[i], aux_tau_values[i]) for i in range(total)
+        process_item.remote(
+            config,
+            data_sources[i],
+            responses[i],
+            reward_model_data[i],
+            tau_values[i],
+            m_values[i],
+        )
+        for i in range(total)
     ]
 
     # Process results as they come in
@@ -121,7 +138,8 @@ def main(config):
                 if one_step_eif_enable:
                     data_source_eif[data_source].append(item_result["one_step_eif_score"])
                     data_source_primary[data_source].append(item_result["primary_score"])
-                    data_source_aux_tau[data_source].append(item_result["aux_tau_values"])
+                    data_source_tau[data_source].append(item_result["tau_llm_value"])
+                    data_source_m[data_source].append(item_result["m_llm_value"])
                 pbar.update(1)
 
     metric_dict = {}
@@ -133,7 +151,8 @@ def main(config):
             metric_dict[f"test_score/{data_source}/one_step_eif_mean"] = float(np.mean(eif_scores))
             summary = summarize_one_step_estimator(
                 data_source_primary[data_source],
-                data_source_aux_tau[data_source],
+                data_source_tau[data_source],
+                data_source_m[data_source],
             )
             for key, value in summary.items():
                 metric_dict[f"test_score/{data_source}/{key}"] = float(value)

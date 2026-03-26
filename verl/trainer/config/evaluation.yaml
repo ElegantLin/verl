@@ -2,11 +2,15 @@ data:
   path: /tmp/math_Qwen2-7B-Instruct.parquet
   prompt_key: prompt
   response_key: responses
+  # If set and `responses` is a list, only score the designated response.
+  # HERO paper eval uses index 0 to report pass@1 on the first decoded output.
+  primary_response_index: null
   data_source_key: data_source
   reward_model_key: reward_model
-  # Optional column for one-step EIF estimator. Each row should be a list of
-  # tau values with length M+1: [tau(x, y, r_1), tau(x, y, r_2), ..., tau(x, y, r_{M+1})].
-  aux_tau_key: null
+  # Algorithm 1 columns for one-step EIF evaluation.
+  # Each row must contain one scalar tau_LLM(x, y, r_i) and one scalar m_LLM(x, y).
+  tau_key: tau_llm_value
+  m_key: m_llm_value
 
 custom_reward_function:
   path: null

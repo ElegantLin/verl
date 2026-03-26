@@ -31,6 +31,8 @@ parse_tau_score = helper_module.parse_tau_score
 resolve_auxiliary_response_bundle = helper_module.resolve_auxiliary_response_bundle
 select_primary_response = helper_module.select_primary_response
 build_aux_reward_messages = helper_module.build_aux_reward_messages
+build_m_messages = helper_module.build_m_messages
+build_reward_model_messages = helper_module.build_reward_model_messages
 build_tau_messages = helper_module.build_tau_messages
 
 
@@ -71,3 +73,24 @@ def test_build_tau_messages_contains_aux_reward():
     assert "tau" in messages[0]["content"].lower()
     assert "0.85" in messages[1]["content"]
     assert "What is 2+2?" in messages[1]["content"]
+
+
+def test_build_m_messages_excludes_auxiliary_reward():
+    messages = build_m_messages("What is 2+2?", "The answer is 4.")
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert "m(x, y)" in messages[1]["content"]
+    assert "Auxiliary reward" not in messages[1]["content"]
+
+
+def test_build_reward_model_messages_reuses_raw_prompt_context():
+    messages = build_reward_model_messages(
+        "ignored question",
+        "assistant answer",
+        raw_prompt=[{"role": "system", "content": "sys"}, {"role": "user", "content": "question"}],
+    )
+    assert messages == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "assistant answer"},
+    ]
