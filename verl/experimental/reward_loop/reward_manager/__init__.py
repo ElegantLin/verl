@@ -21,6 +21,7 @@ from .hybrid_eif_online import HybridEIFOnlineRewardManager
 from .naive import NaiveRewardManager
 from .limited import RateLimitedRewardManager
 from .remote import RemoteRewardManager
+from .visual import VisualRewardManager
 
 __all__ = [
     "DAPORewardManager",
@@ -31,6 +32,7 @@ __all__ = [
     "NaiveRewardManager",
     "RateLimitedRewardManager",
     "RemoteRewardManager",
+    "VisualRewardManager",
     "register",
     "get_reward_manager_cls",
 ]
