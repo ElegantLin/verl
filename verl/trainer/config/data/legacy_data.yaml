@@ -26,6 +26,9 @@ val_max_samples: -1
 # The field in the dataset where the prompt is located. Default is 'prompt'.
 prompt_key: prompt
 
+# Optional parquet output path used by standalone generation utilities.
+output_path: null
+
 # The field used to select the reward function (if using different ones per example).
 reward_fn_key: data_source
 
