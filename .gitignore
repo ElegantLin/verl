@@ -130,3 +130,17 @@ logs
 log
 outputs
 .history
+
+# Local scratch files
+*.pdf
+*.whl
+*.whl.*
+*.ipynb
+*.md
+!README.md
+!docs/**/*.md
+!examples/**/*.md
+!CLAUDE.md
+*.bak
+run.sh
+preprocess.sh
