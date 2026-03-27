@@ -48,11 +48,14 @@ filtered_tbr_path=${EIF_FILTERED_TBR_PATH:-$eval_dir/textbook_reasoning_filtered
 
 base_model_path=${EIF_BASE_MODEL_PATH:-${EIF_MODEL_PATH:-Qwen/Qwen3-4B-Base}}
 trust_remote_code=${EIF_TRUST_REMOTE_CODE:-True}
+source_dataset_trust_remote_code=${EIF_SOURCE_DATASET_TRUST_REMOTE_CODE:-False}
 
-dataset_name=${EIF_DATASET:-OpenMathReasoning}
+dataset_name=${EIF_DATASET:-nvidia/OpenMathReasoning}
 dataset_config=${EIF_DATASET_CONFIG:-}
-dataset_split=${EIF_DATASET_SPLIT:-train}
+dataset_split=${EIF_DATASET_SPLIT:-cot}
 local_dataset_path=${EIF_LOCAL_DATASET_PATH:-}
+source_question_col=${EIF_SOURCE_QUESTION_COL:-problem}
+source_answer_col=${EIF_SOURCE_ANSWER_COL:-expected_answer}
 question_col=${EIF_QUESTION_COL:-question}
 answer_col=${EIF_ANSWER_COL:-answer}
 problem_type_col=${EIF_PROBLEM_TYPE_COL:-problem_type}
@@ -93,8 +96,8 @@ if [[ "$force_source_build" == "1" || ! -f "$source_prompts_path" ]]; then
     source_cmd=(
         python3 examples/data_preprocess/openmathreasoning_hero_source.py
         --split "$dataset_split"
-        --question_col "$question_col"
-        --answer_col "$answer_col"
+        --question_col "$source_question_col"
+        --answer_col "$source_answer_col"
         --problem_type_col "$problem_type_col"
         --problem_type_value "$problem_type_value"
         --source_sample_size "$source_sample_size"
@@ -108,7 +111,7 @@ if [[ "$force_source_build" == "1" || ! -f "$source_prompts_path" ]]; then
         if [[ -n "$dataset_config" ]]; then
             source_cmd+=(--dataset_config "$dataset_config")
         fi
-        if [[ "$trust_remote_code" == "True" ]]; then
+        if [[ "$source_dataset_trust_remote_code" == "True" ]]; then
             source_cmd+=(--trust_remote_code)
         fi
     fi
@@ -143,8 +146,8 @@ if [[ "$force_rl_preprocess" == "1" || ! -f "$data_dir/train_mixed.parquet" || !
     preprocess_cmd=(
         python3 examples/data_preprocess/openmathreasoning_hero.py
         --local_dataset_path "$source_generated_path"
-        --question_col "$question_col"
-        --answer_col "$answer_col"
+        --question_col "$source_question_col"
+        --answer_col "$source_answer_col"
         --response_col responses
         --problem_type_col "$problem_type_col"
         --problem_type_value "$problem_type_value"

@@ -5,7 +5,7 @@ These scripts split the HERO pipeline into ordered stages you can run one by one
 Recommended setup:
 
 ```bash
-export HERO_RUN_NAME=my_hero_run
+export HERO_RUN_NAME=hero_run
 export HERO_GPU_PROFILE=8x24gb   # or 4x80gb
 export HERO_MODEL_PATH=Qwen/Qwen3-4B-Base
 ```

@@ -142,11 +142,14 @@ filtered_tbr_path=${EIF_FILTERED_TBR_PATH:-$eval_dir/textbook_reasoning_filtered
 
 base_model_path=${EIF_BASE_MODEL_PATH:-${EIF_MODEL_PATH:-Qwen/Qwen3-4B-Base}}
 trust_remote_code=${EIF_TRUST_REMOTE_CODE:-True}
+source_dataset_trust_remote_code=${EIF_SOURCE_DATASET_TRUST_REMOTE_CODE:-False}
 
-dataset_name=${EIF_DATASET:-OpenMathReasoning}
+dataset_name=${EIF_DATASET:-nvidia/OpenMathReasoning}
 dataset_config=${EIF_DATASET_CONFIG:-}
-dataset_split=${EIF_DATASET_SPLIT:-train}
+dataset_split=${EIF_DATASET_SPLIT:-cot}
 local_dataset_path=${EIF_LOCAL_DATASET_PATH:-}
+source_question_col=${EIF_SOURCE_QUESTION_COL:-problem}
+source_answer_col=${EIF_SOURCE_ANSWER_COL:-expected_answer}
 question_col=${EIF_QUESTION_COL:-question}
 answer_col=${EIF_ANSWER_COL:-answer}
 problem_type_col=${EIF_PROBLEM_TYPE_COL:-problem_type}

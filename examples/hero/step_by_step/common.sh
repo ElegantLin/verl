@@ -142,11 +142,14 @@ filtered_tbr_path=${HERO_FILTERED_TBR_PATH:-$eval_dir/textbook_reasoning_filtere
 
 base_model_path=${HERO_BASE_MODEL_PATH:-${HERO_MODEL_PATH:-Qwen/Qwen3-4B-Base}}
 trust_remote_code=${HERO_TRUST_REMOTE_CODE:-True}
+source_dataset_trust_remote_code=${HERO_SOURCE_DATASET_TRUST_REMOTE_CODE:-False}
 
-dataset_name=${HERO_DATASET:-OpenMathReasoning}
+dataset_name=${HERO_DATASET:-nvidia/OpenMathReasoning}
 dataset_config=${HERO_DATASET_CONFIG:-}
-dataset_split=${HERO_DATASET_SPLIT:-train}
+dataset_split=${HERO_DATASET_SPLIT:-cot}
 local_dataset_path=${HERO_LOCAL_DATASET_PATH:-}
+source_question_col=${HERO_SOURCE_QUESTION_COL:-problem}
+source_answer_col=${HERO_SOURCE_ANSWER_COL:-expected_answer}
 question_col=${HERO_QUESTION_COL:-question}
 answer_col=${HERO_ANSWER_COL:-answer}
 problem_type_col=${HERO_PROBLEM_TYPE_COL:-problem_type}
