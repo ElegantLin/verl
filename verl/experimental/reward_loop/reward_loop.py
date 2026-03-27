@@ -32,7 +32,7 @@ from verl.utils import hf_tokenizer
 from verl.utils.experimental.reward_utils import pil_image_to_base64, prepare_query_for_multi_modal
 from verl.utils.fs import copy_to_local
 from verl.utils.ray_utils import get_event_loop
-from verl.utils.reward_score.hero import apply_hero_shaping
+from verl.utils.reward_score.hero import apply_hero_shaping, apply_naive_reward_combine
 from verl.utils.reward_score.hybrid_reward_eif import (
     AceMathRewardScorer,
     MarginalLLMScorer,
@@ -190,7 +190,7 @@ class RewardLoopWorker:
 
     async def compute_score(self, data: DataProto) -> dict:
         assert len(data) == 1, "RewardLoopWorker only support single data item"
-        if self.config.reward.reward_manager.name == "hero":
+        if self.config.reward.reward_manager.name in {"hero", "naive_combine"}:
             return await self.compute_score_hero(data)
         if self.config.reward.reward_manager.name == "hybrid_eif":
             # hybrid_eif uses precomputed tau samples from the batch, so the worker only computes phi.
@@ -600,6 +600,28 @@ class RewardLoopManager:
                 info["hero_group_sigma"] = float(hero_diag["group_sigma"][i])
                 info["hero_sigma_bar"] = float(self._hero_sigma_bar)
                 info["hero_final_score"] = float(scores[i])
+                info.setdefault("acc", float(rule_scores[i]))
+        elif self.config.reward.reward_manager.name == "naive_combine":
+            naive_cfg = self.config.reward.get("reward_kwargs", {}).get("naive_combine", {})
+            alpha = float(naive_cfg.get("alpha", 0.5))
+            rule_scores = np.asarray(
+                [info.get("hero_rule_score", score) for info, score in zip(reward_extra_infos, scores, strict=True)],
+                dtype=np.float32,
+            )
+            dense_scores = np.asarray(
+                [info.get("hero_rm_score", score) for info, score in zip(reward_extra_infos, scores, strict=True)],
+                dtype=np.float32,
+            )
+            scores = apply_naive_reward_combine(
+                rule_scores=rule_scores,
+                rm_scores=dense_scores,
+                alpha=alpha,
+            ).tolist()
+            for i, info in enumerate(reward_extra_infos):
+                info["naive_combine_rule_score"] = float(rule_scores[i])
+                info["naive_combine_rm_score"] = float(dense_scores[i])
+                info["naive_combine_alpha"] = alpha
+                info["naive_combine_final_score"] = float(scores[i])
                 info.setdefault("acc", float(rule_scores[i]))
         elif self.config.reward.reward_manager.name == "hybrid_eif":
             hybrid_eif_cfg = self.config.reward.get("reward_kwargs", {}).get("hybrid_eif", {})

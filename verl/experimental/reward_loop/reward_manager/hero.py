@@ -21,6 +21,7 @@ from verl.utils.reward_score import default_compute_score
 
 
 @register("hero")
+@register("naive_combine")
 class HeroRewardManager(RewardManagerBase):
     """Rule-side reward manager for HERO.
 

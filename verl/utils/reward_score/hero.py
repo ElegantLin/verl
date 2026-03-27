@@ -24,6 +24,32 @@ def _ordered_unique(values: np.ndarray) -> list[Any]:
     return list(OrderedDict.fromkeys(values.tolist()).keys())
 
 
+def apply_naive_reward_combine(
+    *,
+    rule_scores: np.ndarray | list[float],
+    rm_scores: np.ndarray | list[float],
+    alpha: float = 0.5,
+) -> np.ndarray:
+    """Linearly combine verifier and RM scores for the naive hybrid baseline.
+
+    This matches the appendix baseline where the final reward is a direct weighted
+    average of the sparse verifier score and the dense reward-model score.
+    """
+    if not 0.0 <= alpha <= 1.0:
+        raise ValueError(f"alpha must be in [0, 1], but got {alpha=}.")
+
+    rule = np.asarray(rule_scores, dtype=np.float32)
+    rm = np.asarray(rm_scores, dtype=np.float32)
+
+    if rule.shape != rm.shape:
+        raise ValueError(f"rule_scores and rm_scores must have the same shape, but got {rule.shape=} and {rm.shape=}.")
+
+    if rule.ndim != 1:
+        raise ValueError(f"Only 1D inputs are supported, but got {rule.ndim=}.")
+
+    return (alpha * rule + (1.0 - alpha) * rm).astype(np.float32)
+
+
 def apply_hero_shaping(
     *,
     rule_scores: np.ndarray | list[float],
