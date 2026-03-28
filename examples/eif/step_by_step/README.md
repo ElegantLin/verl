@@ -6,9 +6,9 @@ Recommended setup:
 
 ```bash
 export EIF_RUN_NAME=my_eif_run
-export EIF_GPU_PROFILE=8x24gb   # or 4x80gb
+export EIF_GPU_PROFILE=8x24gb   # or 4x80gb or 2x80gb
 export EIF_MODEL_PATH=Qwen/Qwen3-4B-Base
-export OPENAI_API_KEY=<your-key>  # required for tau/m LLM endpoints
+export NAUTILUS_API_KEY=<your-key>  # required for tau/m LLM endpoints
 ```
 
 If you already have OpenMathReasoning locally, also set:
@@ -42,6 +42,7 @@ Notes:
 
 - `EIF_GPU_PROFILE=8x24gb` uses safer defaults for 8 x 24GB GPUs.
 - `EIF_GPU_PROFILE=4x80gb` uses larger defaults for 4 x 80GB GPUs.
+- `EIF_GPU_PROFILE=2x80gb` uses minimal defaults for 2 x 80GB GPUs.
 - You can still override any underlying env var, such as `EIF_MAX_RESPONSE_LENGTH`, `EIF_ROLLOUT_N`, `EIF_RM_TP_SIZE`, or `EIF_REGIME`.
 - EIF training requires tau/m LLM endpoints. Configure with `EIF_TAU_MODEL`, `EIF_TAU_BASE_URL`, `EIF_M_MODEL`, `EIF_M_BASE_URL`.
-- Hard-to-verify evaluation reuses the HERO LLM judge (`examples/hero/eval_hero_llm_judge.py`), so set `OPENAI_API_KEY` before `08_run_final_eval.sh` if you evaluate `hardverify_math` or `textbook_reasoning`.
+- Hard-to-verify evaluation reuses the HERO LLM judge (`examples/hero/eval_hero_llm_judge.py`), so set `NAUTILUS_API_KEY` before `08_run_final_eval.sh` if you evaluate `hardverify_math` or `textbook_reasoning`.

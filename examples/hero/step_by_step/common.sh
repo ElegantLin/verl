@@ -120,8 +120,44 @@ case "$gpu_profile" in
         set_default HERO_SFT_MAX_LENGTH 6144
         set_default HERO_SFT_MAX_TOKEN_LEN_PER_GPU 8192
         ;;
+    2x80|2x80gb)
+        set_default HERO_GPUS_PER_NODE 2
+        set_default HERO_NNODES 1
+        set_default HERO_GEN_GPUS_PER_NODE 2
+        set_default HERO_GEN_NNODES 1
+        set_default HERO_SFT_GPUS_PER_NODE 2
+        set_default HERO_SFT_NNODES 1
+        set_default HERO_EVAL_GPUS_PER_NODE 2
+        set_default HERO_EVAL_NNODES 1
+        set_default HERO_MAX_PROMPT_LENGTH 1024
+        set_default HERO_MAX_RESPONSE_LENGTH 4096
+        set_default HERO_TRAIN_BATCH_SIZE 64
+        set_default HERO_PPO_MINI_BATCH_SIZE 32
+        set_default HERO_PPO_MICRO_BATCH_SIZE_PER_GPU 4
+        set_default HERO_ROLLOUT_N 8
+        set_default HERO_ROLLOUT_TP_SIZE 2
+        set_default HERO_ROLLOUT_GPU_MEMORY_UTILIZATION 0.7
+        set_default HERO_ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU 4
+        set_default HERO_REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU 4
+        set_default HERO_ROLLOUT_MAX_NUM_SEQS 64
+        set_default HERO_RM_GPUS_PER_NODE 2
+        set_default HERO_RM_NNODES 1
+        set_default HERO_RM_TP_SIZE 2
+        set_default HERO_RM_GPU_MEMORY_UTILIZATION 0.6
+        set_default HERO_RM_MAX_NUM_SEQS 64
+        set_default HERO_GEN_TP_SIZE 2
+        set_default HERO_GEN_GPU_MEMORY_UTILIZATION 0.75
+        set_default HERO_SOURCE_GENERATION_N 1
+        set_default HERO_EVAL_TP_SIZE 2
+        set_default HERO_EVAL_GPU_MEMORY_UTILIZATION 0.75
+        set_default HERO_EVAL_N_SAMPLES 8
+        set_default HERO_SFT_TRAIN_BATCH_SIZE 32
+        set_default HERO_SFT_MICRO_BATCH_SIZE_PER_GPU 2
+        set_default HERO_SFT_MAX_LENGTH 6144
+        set_default HERO_SFT_MAX_TOKEN_LEN_PER_GPU 8192
+        ;;
     *)
-        echo "Unknown HERO_GPU_PROFILE=$gpu_profile. Use 8x24gb or 4x80gb." >&2
+        echo "Unknown HERO_GPU_PROFILE=$gpu_profile. Use 8x24gb, 4x80gb, or 2x80gb." >&2
         exit 1
         ;;
 esac

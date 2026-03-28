@@ -6,7 +6,7 @@ Recommended setup:
 
 ```bash
 export HERO_RUN_NAME=hero_run
-export HERO_GPU_PROFILE=8x24gb   # or 4x80gb
+export HERO_GPU_PROFILE=8x24gb   # or 4x80gb or 2x80gb
 export HERO_MODEL_PATH=Qwen/Qwen3-4B-Base
 ```
 
@@ -41,5 +41,6 @@ Notes:
 
 - `HERO_GPU_PROFILE=8x24gb` uses safer defaults for 8 x 24GB GPUs.
 - `HERO_GPU_PROFILE=4x80gb` uses larger defaults for 4 x 80GB GPUs.
+- `HERO_GPU_PROFILE=2x80gb` uses minimal defaults for 2 x 80GB GPUs.
 - You can still override any underlying env var, such as `HERO_MAX_RESPONSE_LENGTH`, `HERO_ROLLOUT_N`, `HERO_RM_TP_SIZE`, or `HERO_REGIME`.
-- Hard-to-verify evaluation uses the OpenAI-compatible judge defaults already wired into `examples/hero/run_hero_eval.sh`, so set `OPENAI_API_KEY` before `08_run_final_eval.sh` if you evaluate `hardverify_math` or `textbook_reasoning`.
+- Hard-to-verify evaluation uses the OpenAI-compatible judge defaults already wired into `examples/hero/run_hero_eval.sh`, so set `NAUTILUS_API_KEY` before `08_run_final_eval.sh` if you evaluate `hardverify_math` or `textbook_reasoning`.
