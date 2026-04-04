@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import copy
+import json
 import logging
 import os
 import re
@@ -151,6 +152,29 @@ class RLHFDataset(Dataset):
         for i, parquet_file in enumerate(data_files):
             self.data_files[i] = copy_to_local(src=parquet_file, cache_dir=self.cache_dir, use_shm=self.use_shm)
 
+    @staticmethod
+    def _align_extra_info_schemas(dataframes):
+        """Convert extra_info to JSON string if struct schemas differ across datasets."""
+        extra_info_features = []
+        for df in dataframes:
+            if "extra_info" in df.column_names:
+                extra_info_features.append(str(df.features["extra_info"]))
+            else:
+                extra_info_features.append(None)
+
+        # Nothing to do if no extra_info or all schemas identical
+        non_none = [f for f in extra_info_features if f is not None]
+        if not non_none or (len(set(non_none)) == 1 and all(f is not None for f in extra_info_features)):
+            return dataframes
+
+        logger.warning("extra_info schemas differ across data files; converting to JSON string for compatibility")
+        result = []
+        for df in dataframes:
+            if "extra_info" in df.column_names:
+                df = df.map(lambda x: {"extra_info": json.dumps(x["extra_info"]) if x["extra_info"] is not None else "{}"})
+            result.append(df)
+        return result
+
     def _read_files_and_tokenize(self):
         dataframes = []
         for parquet_file in self.data_files:
@@ -162,6 +186,8 @@ class RLHFDataset(Dataset):
             else:
                 raise ValueError(f"Unsupported file format: {parquet_file}")
             dataframes.append(dataframe)
+        if len(dataframes) > 1:
+            dataframes = self._align_extra_info_schemas(dataframes)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 
         total = len(self.dataframe)
@@ -368,6 +394,8 @@ class RLHFDataset(Dataset):
         # add index for each prompt
         if "extra_info" not in row_dict or row_dict["extra_info"] is None:
             row_dict["extra_info"] = dict()
+        elif isinstance(row_dict["extra_info"], str):
+            row_dict["extra_info"] = json.loads(row_dict["extra_info"])
         index = row_dict.get("extra_info", {}).get("index", 0)
         tools_kwargs = row_dict.get("extra_info", {}).get("tools_kwargs", {})
         interaction_kwargs = row_dict.get("extra_info", {}).get("interaction_kwargs", {})
