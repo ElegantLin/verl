@@ -11,7 +11,7 @@
 #        python examples/data_preprocess/hero_eval_benchmarks.py \
 #            --local_save_dir ~/data/hero_eval
 #   2. pip install math-verify
-#   3. Set OPENAI_API_KEY for the external judge (hard-to-verify eval only)
+#   3. Set NAUTILUS_API_KEY for the external judge (hard-to-verify eval only)
 #
 # Usage:
 #   EIF_MODEL_PATH=/path/to/checkpoint bash examples/eif/run_eif_eval.sh

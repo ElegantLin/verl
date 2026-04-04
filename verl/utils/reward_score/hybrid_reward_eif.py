@@ -406,7 +406,7 @@ class AceMathRewardScorer:
 class TauLLMScorer:
     model: str = "qwen3"
     base_url: str = "https://ellm.nrp-nautilus.io/v1"
-    api_key_env: str = "OPENAI_API_KEY"
+    api_key_env: str = "NAUTILUS_API_KEY"
     temperature: float = 0.0
     max_tokens: int = 16
     timeout: float = 300.0
@@ -515,7 +515,7 @@ class TauLLMScorer:
 class MarginalLLMScorer:
     model: str = 'qwen3'
     base_url: str = 'https://ellm.nrp-nautilus.io/v1'
-    api_key_env: str = 'OPENAI_API_KEY'
+    api_key_env: str = 'NAUTILUS_API_KEY'
     temperature: float = 0.0
     max_tokens: int = 16
     timeout: float = 300.0

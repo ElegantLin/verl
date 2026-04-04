@@ -427,7 +427,7 @@ class RewardLoopManager:
             self._hybrid_eif_online_tau_scorer = TauLLMScorer(
                 model=str(cfg.get("tau_model", "Qwen/Qwen3.5-397B-A17B-FP8")),
                 base_url=str(cfg.get("tau_base_url", "http://localhost:8000/v1")),
-                api_key_env=str(cfg.get("tau_api_key_env", "OPENAI_API_KEY")),
+                api_key_env=str(cfg.get("tau_api_key_env", "NAUTILUS_API_KEY")),
                 temperature=float(cfg.get("tau_temperature", 0.0)),
                 max_tokens=int(cfg.get("tau_max_tokens", 16)),
                 timeout=float(cfg.get("tau_timeout", 300.0)),
@@ -437,7 +437,7 @@ class RewardLoopManager:
             self._hybrid_eif_online_m_scorer = MarginalLLMScorer(
                 model=str(cfg.get("m_model", cfg.get("tau_model", "Qwen/Qwen3.5-397B-A17B-FP8"))),
                 base_url=str(cfg.get("m_base_url", cfg.get("tau_base_url", "http://localhost:8000/v1"))),
-                api_key_env=str(cfg.get("m_api_key_env", cfg.get("tau_api_key_env", "OPENAI_API_KEY"))),
+                api_key_env=str(cfg.get("m_api_key_env", cfg.get("tau_api_key_env", "NAUTILUS_API_KEY"))),
                 temperature=float(cfg.get("m_temperature", 0.0)),
                 max_tokens=int(cfg.get("m_max_tokens", 16)),
                 timeout=float(cfg.get("m_timeout", 300.0)),

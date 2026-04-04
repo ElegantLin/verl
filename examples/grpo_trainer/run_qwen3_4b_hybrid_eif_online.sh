@@ -75,11 +75,11 @@ fi
 
 llm_model=${HYBRID_EIF_ONLINE_LLM_MODEL:-qwen3}
 llm_base_url=${HYBRID_EIF_ONLINE_LLM_BASE_URL:-https://ellm.nrp-nautilus.io/v1}
-llm_api_key_env=${HYBRID_EIF_ONLINE_LLM_API_KEY_ENV:-OPENAI_API_KEY}
+llm_api_key_env=${HYBRID_EIF_ONLINE_LLM_API_KEY_ENV:-NAUTILUS_API_KEY}
 
 tau_model=${HYBRID_EIF_ONLINE_TAU_MODEL:-$llm_model}
 tau_base_url=${HYBRID_EIF_ONLINE_TAU_BASE_URL:-$llm_base_url}
-tau_api_key_env=${HYBRID_EIF_ONLINE_TAU_API_KEY_ENV:-OPENAI_API_KEY}
+tau_api_key_env=${HYBRID_EIF_ONLINE_TAU_API_KEY_ENV:-NAUTILUS_API_KEY}
 tau_temperature=${HYBRID_EIF_ONLINE_TAU_TEMPERATURE:-0.0}
 tau_max_tokens=${HYBRID_EIF_ONLINE_TAU_MAX_TOKENS:-16}
 tau_concurrency=${HYBRID_EIF_ONLINE_TAU_CONCURRENCY:-128}

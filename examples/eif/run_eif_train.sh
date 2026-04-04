@@ -14,7 +14,7 @@
 #        python examples/data_preprocess/hero_eval_benchmarks.py \
 #            --local_save_dir ~/data/hero_eval
 #   3. pip install math-verify openai
-#   4. Set OPENAI_API_KEY for tau/m LLM endpoints
+#   4. Set NAUTILUS_API_KEY for tau/m LLM endpoints
 #
 # Usage:
 #   bash examples/eif/run_eif_train.sh
@@ -87,7 +87,7 @@ rm_max_num_batched_tokens=${EIF_RM_MAX_NUM_BATCHED_TOKENS:-$((rm_prompt_length +
 # ─── tau_LLM / m_LLM endpoints (Algorithm 1 nuisance regressors) ─────
 llm_model=${EIF_LLM_MODEL:-qwen3}
 llm_base_url=${EIF_LLM_BASE_URL:-https://ellm.nrp-nautilus.io/v1}
-llm_api_key_env=${EIF_LLM_API_KEY_ENV:-OPENAI_API_KEY}
+llm_api_key_env=${EIF_LLM_API_KEY_ENV:-NAUTILUS_API_KEY}
 
 tau_model=${EIF_TAU_MODEL:-$llm_model}
 tau_base_url=${EIF_TAU_BASE_URL:-$llm_base_url}

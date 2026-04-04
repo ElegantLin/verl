@@ -225,7 +225,7 @@ def main():
     parser.add_argument("--input_parquet", required=True, help="Parquet file with generated responses.")
     parser.add_argument("--judge_model", default=DEFAULT_JUDGE_MODEL, help="Model to use as judge.")
     parser.add_argument("--base_url", default=DEFAULT_OPENAI_COMPAT_BASE_URL, help="OpenAI-compatible API base URL.")
-    parser.add_argument("--api_key_env", default="OPENAI_API_KEY", help="Env var for API key.")
+    parser.add_argument("--api_key_env", default="NAUTILUS_API_KEY", help="Env var for API key.")
     parser.add_argument("--concurrency", type=int, default=32, help="Max concurrent API requests.")
     parser.add_argument("--output_path", default=None, help="Path to save detailed results JSON.")
     parser.add_argument(

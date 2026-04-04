@@ -91,13 +91,13 @@ def main():
     # tau_LLM
     parser.add_argument("--tau_model", default="qwen3")
     parser.add_argument("--tau_base_url", default="https://ellm.nrp-nautilus.io/v1")
-    parser.add_argument("--tau_api_key_env", default="OPENAI_API_KEY")
+    parser.add_argument("--tau_api_key_env", default="NAUTILUS_API_KEY")
     parser.add_argument("--tau_temperature", type=float, default=0.0)
     parser.add_argument("--tau_max_tokens", type=int, default=16)
     # m_LLM
     parser.add_argument("--m_model", default="qwen3")
     parser.add_argument("--m_base_url", default=None)
-    parser.add_argument("--m_api_key_env", default="OPENAI_API_KEY")
+    parser.add_argument("--m_api_key_env", default="NAUTILUS_API_KEY")
     parser.add_argument("--m_temperature", type=float, default=0.0)
     parser.add_argument("--m_max_tokens", type=int, default=16)
     args = parser.parse_args()

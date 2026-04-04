@@ -100,14 +100,14 @@ reward_kwargs:
     # Tau LLM (tau_LLM): P(phi=1 | question, response, auxiliary reward).
     tau_model: qwen3
     tau_base_url: https://ellm.nrp-nautilus.io/v1
-    tau_api_key_env: OPENAI_API_KEY
+    tau_api_key_env: NAUTILUS_API_KEY
     tau_temperature: 0.0
     tau_max_tokens: 16
     tau_timeout: 300.0
     # Marginal LLM (m_LLM): P(phi=1 | question, response).
     m_model: qwen3
     m_base_url: https://ellm.nrp-nautilus.io/v1
-    m_api_key_env: OPENAI_API_KEY
+    m_api_key_env: NAUTILUS_API_KEY
     m_temperature: 0.0
     m_max_tokens: 16
     m_timeout: 300.0
