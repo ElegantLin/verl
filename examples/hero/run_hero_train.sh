@@ -60,6 +60,7 @@ nnodes=${HERO_NNODES:-8}
 train_batch_size=${HERO_TRAIN_BATCH_SIZE:-512}
 ppo_mini_batch_size=${HERO_PPO_MINI_BATCH_SIZE:-128}
 ppo_micro_batch_size=${HERO_PPO_MICRO_BATCH_SIZE_PER_GPU:-2}
+ppo_max_token_len_per_gpu=${HERO_PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
 
 max_prompt_length=${HERO_MAX_PROMPT_LENGTH:-1024}
 max_response_length=${HERO_MAX_RESPONSE_LENGTH:-8192}
@@ -96,13 +97,28 @@ max_actor_ckpt_to_keep=${HERO_MAX_ACTOR_CKPT_TO_KEEP:-1}
 max_critic_ckpt_to_keep=${HERO_MAX_CRITIC_CKPT_TO_KEEP:-1}
 resume_mode=${HERO_RESUME_MODE:-disable}
 
+debug_mode=${HERO_DEBUG:-}
+skip_benchmarks=${HERO_SKIP_BENCHMARKS:-}
 val_files="['$val_file'"
-for bench in math500 amc minerva olympiad hardverify_math textbook_reasoning; do
-    bench_file="$eval_dir/${bench}.parquet"
+if [[ -n "$debug_mode" ]]; then
+    # Debug mode: only use amc benchmark
+    echo "Debug mode enabled: only using amc benchmark for validation"
+    bench_file="$eval_dir/amc.parquet"
     if [[ -f "$bench_file" ]]; then
         val_files="$val_files,'$bench_file'"
     fi
-done
+else
+    for bench in math500 amc minerva olympiad hardverify_math textbook_reasoning; do
+        if [[ -n "$skip_benchmarks" ]] && echo "$skip_benchmarks" | grep -qw "$bench"; then
+            echo "Skipping benchmark: $bench"
+            continue
+        fi
+        bench_file="$eval_dir/${bench}.parquet"
+        if [[ -f "$bench_file" ]]; then
+            val_files="$val_files,'$bench_file'"
+        fi
+    done
+fi
 val_files="$val_files]"
 
 if [[ ! -f "$train_file" ]]; then
@@ -120,4 +136,4 @@ fi
 mkdir -p "$train_output_dir"
 echo "Training output dir: $train_output_dir"
 
-python3 -m verl.trainer.main_ppo     algorithm.adv_estimator=grpo     data.train_files="['$train_file']"     data.val_files="$val_files"     data.train_batch_size="$train_batch_size"     data.max_prompt_length="$max_prompt_length"     data.max_response_length="$max_response_length"     data.filter_overlong_prompts=True     data.truncation='error'     actor_rollout_ref.model.path="$model_path"     actor_rollout_ref.model.trust_remote_code="$trust_remote_code"     actor_rollout_ref.actor.optim.lr=1e-6     actor_rollout_ref.model.use_remove_padding=True     actor_rollout_ref.model.enable_gradient_checkpointing=True     actor_rollout_ref.actor.ppo_mini_batch_size="$ppo_mini_batch_size"     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$ppo_micro_batch_size"     actor_rollout_ref.actor.use_kl_loss=False     actor_rollout_ref.actor.kl_loss_coef=0.0     actor_rollout_ref.actor.entropy_coeff=0.0     actor_rollout_ref.actor.use_dynamic_bsz=True     actor_rollout_ref.actor.clip_ratio=0.2     actor_rollout_ref.actor.clip_ratio_high=0.28     actor_rollout_ref.actor.checkpoint.save_contents="$checkpoint_save_contents"     actor_rollout_ref.rollout.name=vllm     actor_rollout_ref.rollout.gpu_memory_utilization="$rollout_gpu_memory_utilization"     actor_rollout_ref.rollout.max_num_seqs="$rollout_max_num_seqs"     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="$rollout_log_prob_micro_batch_size"     actor_rollout_ref.rollout.tensor_model_parallel_size="$rollout_tp_size"     actor_rollout_ref.rollout.n="$rollout_n"     actor_rollout_ref.rollout.temperature="$rollout_temperature"     actor_rollout_ref.rollout.top_p=0.95     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="$ref_log_prob_micro_batch_size"     algorithm.use_kl_in_reward=False     reward.reward_manager.name=hero     reward.reward_model.enable=True     reward.reward_model.enable_resource_pool="$rm_enable_resource_pool"     reward.reward_model.n_gpus_per_node="$rm_gpus"     reward.reward_model.nnodes="$rm_nodes"     reward.reward_model.model_path="$dense_rm_model"     reward.reward_model.rollout.name=vllm     reward.reward_model.rollout.tensor_model_parallel_size="$rm_tp_size"     reward.reward_model.rollout.gpu_memory_utilization="$rm_gpu_memory_utilization"     reward.reward_model.rollout.max_num_seqs="$rm_max_num_seqs"     reward.reward_model.rollout.prompt_length="$max_prompt_length"     reward.reward_model.rollout.response_length="$max_response_length"     reward.reward_kwargs.hero.alpha="$hero_alpha"     reward.reward_kwargs.hero.beta="$hero_beta"     reward.reward_kwargs.hero.w_min="$hero_w_min"     reward.reward_kwargs.hero.w_max="$hero_w_max"     reward.reward_kwargs.hero.k="$hero_k"     reward.reward_kwargs.hero.sigma_ema="$hero_sigma_ema"     trainer.critic_warmup=0     trainer.logger="$loggers"     trainer.project_name='hero_paper_reproduction'     trainer.experiment_name="$experiment_name"     trainer.nnodes="$nnodes"     trainer.n_gpus_per_node="$gpus_per_node"     trainer.save_freq="$save_freq"     trainer.test_freq="$test_freq"     trainer.total_epochs="$total_epochs"     trainer.resume_mode="$resume_mode"     trainer.default_local_dir="$train_output_dir"     trainer.max_actor_ckpt_to_keep="$max_actor_ckpt_to_keep"     trainer.max_critic_ckpt_to_keep="$max_critic_ckpt_to_keep"     "$@"
+python3 -m verl.trainer.main_ppo     algorithm.adv_estimator=grpo     data.train_files="['$train_file']"     data.val_files="$val_files"     data.train_batch_size="$train_batch_size"     data.max_prompt_length="$max_prompt_length"     data.max_response_length="$max_response_length"     data.filter_overlong_prompts=True     data.truncation='error'     actor_rollout_ref.model.path="$model_path"     actor_rollout_ref.model.trust_remote_code="$trust_remote_code"     actor_rollout_ref.actor.optim.lr=1e-6     actor_rollout_ref.model.use_remove_padding=True     actor_rollout_ref.model.enable_gradient_checkpointing=True     actor_rollout_ref.actor.ppo_mini_batch_size="$ppo_mini_batch_size"     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$ppo_micro_batch_size"     actor_rollout_ref.actor.use_kl_loss=False     actor_rollout_ref.actor.kl_loss_coef=0.0     actor_rollout_ref.actor.entropy_coeff=0.0     actor_rollout_ref.actor.use_dynamic_bsz=True     actor_rollout_ref.actor.ppo_max_token_len_per_gpu="$ppo_max_token_len_per_gpu"     actor_rollout_ref.actor.clip_ratio=0.2     actor_rollout_ref.actor.clip_ratio_high=0.28     actor_rollout_ref.actor.checkpoint.save_contents="$checkpoint_save_contents"     actor_rollout_ref.rollout.name=vllm     actor_rollout_ref.rollout.gpu_memory_utilization="$rollout_gpu_memory_utilization"     actor_rollout_ref.rollout.max_num_seqs="$rollout_max_num_seqs"     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="$rollout_log_prob_micro_batch_size"     actor_rollout_ref.rollout.tensor_model_parallel_size="$rollout_tp_size"     actor_rollout_ref.rollout.n="$rollout_n"     actor_rollout_ref.rollout.temperature="$rollout_temperature"     actor_rollout_ref.rollout.top_p=0.95     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="$ref_log_prob_micro_batch_size"     algorithm.use_kl_in_reward=False     reward.reward_manager.name=hero     reward.reward_model.enable=True     reward.reward_model.enable_resource_pool="$rm_enable_resource_pool"     reward.reward_model.n_gpus_per_node="$rm_gpus"     reward.reward_model.nnodes="$rm_nodes"     reward.reward_model.model_path="$dense_rm_model"     reward.reward_model.rollout.name=vllm     reward.reward_model.rollout.tensor_model_parallel_size="$rm_tp_size"     reward.reward_model.rollout.gpu_memory_utilization="$rm_gpu_memory_utilization"     reward.reward_model.rollout.max_num_seqs="$rm_max_num_seqs"     reward.reward_model.rollout.prompt_length="$max_prompt_length"     reward.reward_model.rollout.response_length="$max_response_length"     reward.reward_kwargs.hero.alpha="$hero_alpha"     reward.reward_kwargs.hero.beta="$hero_beta"     reward.reward_kwargs.hero.w_min="$hero_w_min"     reward.reward_kwargs.hero.w_max="$hero_w_max"     reward.reward_kwargs.hero.k="$hero_k"     reward.reward_kwargs.hero.sigma_ema="$hero_sigma_ema"     trainer.critic_warmup=0     trainer.logger="$loggers"     trainer.project_name='hero_paper_reproduction'     trainer.experiment_name="$experiment_name"     trainer.nnodes="$nnodes"     trainer.n_gpus_per_node="$gpus_per_node"     trainer.save_freq="$save_freq"     trainer.test_freq="$test_freq"     trainer.total_epochs="$total_epochs"     trainer.resume_mode="$resume_mode"     trainer.default_local_dir="$train_output_dir"     trainer.max_actor_ckpt_to_keep="$max_actor_ckpt_to_keep"     trainer.max_critic_ckpt_to_keep="$max_critic_ckpt_to_keep"     "$@"
