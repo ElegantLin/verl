@@ -35,6 +35,9 @@ max_length=${HERO_SFT_MAX_LENGTH:-9216}
 max_token_len_per_gpu=${HERO_SFT_MAX_TOKEN_LEN_PER_GPU:-12288}
 truncation=${HERO_SFT_TRUNCATION:-error}
 learning_rate=${HERO_SFT_LR:-1e-5}
+lr_scheduler_type=${HERO_SFT_LR_SCHEDULER:-cosine}
+lr_warmup_steps_ratio=${HERO_SFT_LR_WARMUP_RATIO:-0.1}
+min_lr_ratio=${HERO_SFT_MIN_LR_RATIO:-0.0}
 total_epochs=${HERO_SFT_TOTAL_EPOCHS:-2}
 save_freq=${HERO_SFT_SAVE_FREQ:-after_each_epoch}
 test_freq=${HERO_SFT_TEST_FREQ:--1}
@@ -43,6 +46,7 @@ experiment_name=${HERO_SFT_EXPERIMENT_NAME:-hero_cold_start_sft_$(date +%Y%m%d_%
 checkpoint_save_contents=${HERO_SFT_CHECKPOINT_SAVE_CONTENTS:-"['model','optimizer','extra','hf_model']"}
 max_ckpt_to_keep=${HERO_SFT_MAX_CKPT_TO_KEEP:-1}
 resume_mode=${HERO_SFT_RESUME_MODE:-disable}
+attn_implementation=${HERO_SFT_ATTN_IMPLEMENTATION:-flash_attention_2}
 
 train_path="$sft_data_dir/train.parquet"
 val_path="$sft_data_dir/val.parquet"
@@ -63,6 +67,13 @@ fi
 if [[ "$need_preprocess" == "1" ]]; then
     mkdir -p "$sft_data_dir"
     python3 examples/data_preprocess/openmathreasoning_hero_sft.py         --input_path "$input_path"         --question_col "$question_col"         --answer_col "$answer_col"         --prompt_col "$prompt_col"         --reward_model_col "$reward_model_col"         --response_col "$response_col"         --primary_response_index "$primary_response_index"         --num_samples "$num_samples"         --val_size "$val_size"         --seed "$seed"         --max_response_chars "$max_response_chars"         --output_dir "$sft_data_dir"
+fi
+
+if [[ "$attn_implementation" == "flash_attention_2" ]]; then
+    if ! python3 -c "import flash_attn" >/dev/null 2>&1; then
+        echo 'flash_attn is unavailable; falling back to "sdpa" for cold-start SFT.' >&2
+        attn_implementation=sdpa
+    fi
 fi
 
 mkdir -p "$output_dir"
@@ -86,11 +97,16 @@ sft_args=(
     data.truncation="$truncation"
     data.use_dynamic_bsz=True
     data.max_token_len_per_gpu="$max_token_len_per_gpu"
+    data.ignore_input_ids_mismatch=True
     model.path="$model_path"
     model.trust_remote_code="$trust_remote_code"
+    +model.override_config.attn_implementation="$attn_implementation"
     model.use_remove_padding=True
     model.enable_gradient_checkpointing=True
     optim.lr="$learning_rate"
+    optim.lr_scheduler_type="$lr_scheduler_type"
+    optim.lr_warmup_steps_ratio="$lr_warmup_steps_ratio"
+    optim.min_lr_ratio="$min_lr_ratio"
     checkpoint.save_contents="$checkpoint_save_contents"
     trainer.default_local_dir="$output_dir"
     trainer.project_name=hero_paper_reproduction
