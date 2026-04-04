@@ -12,12 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+from contextlib import contextmanager
+
 try:
     from math_verify.errors import TimeoutException
     from math_verify.metric import math_metric
     from math_verify.parser import ExprExtractionConfig, LatexExtractionConfig
 except ImportError:
     print("To use Math-Verify, please install it first by running `pip install math-verify`.")
+
+
+@contextmanager
+def _silence_math_verify_metric_warnings():
+    logger = logging.getLogger("math_verify.metric")
+    previous_level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(previous_level)
 
 
 def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
@@ -30,7 +44,8 @@ def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0
     # Wrap the ground truth in \boxed{} format for verification
     ground_truth_boxed = "\\boxed{" + ground_truth + "}"
     try:
-        ret_score, _ = verify_func([ground_truth_boxed], [model_output])
+        with _silence_math_verify_metric_warnings():
+            ret_score, _ = verify_func([ground_truth_boxed], [model_output])
     except Exception:
         pass
     except TimeoutException:
