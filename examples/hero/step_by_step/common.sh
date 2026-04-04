@@ -61,17 +61,18 @@ case "$gpu_profile" in
         set_default HERO_MAX_RESPONSE_LENGTH 2048
         set_default HERO_TRAIN_BATCH_SIZE 64
         set_default HERO_PPO_MINI_BATCH_SIZE 64
-        set_default HERO_PPO_MICRO_BATCH_SIZE_PER_GPU 2
+        set_default HERO_PPO_MICRO_BATCH_SIZE_PER_GPU 1
+        set_default HERO_PPO_MAX_TOKEN_LEN_PER_GPU 6144
         set_default HERO_ROLLOUT_N 4
         set_default HERO_ROLLOUT_TP_SIZE 2
-        set_default HERO_ROLLOUT_GPU_MEMORY_UTILIZATION 0.5
+        set_default HERO_ROLLOUT_GPU_MEMORY_UTILIZATION 0.35
         set_default HERO_ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU 2
         set_default HERO_REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU 2
         set_default HERO_ROLLOUT_MAX_NUM_SEQS 128
         set_default HERO_RM_GPUS_PER_NODE 8
         set_default HERO_RM_NNODES 1
         set_default HERO_RM_TP_SIZE 2
-        set_default HERO_RM_GPU_MEMORY_UTILIZATION 0.5
+        set_default HERO_RM_GPU_MEMORY_UTILIZATION 0.3
         set_default HERO_RM_MAX_NUM_SEQS 128
         set_default HERO_GEN_TP_SIZE 2
         set_default HERO_GEN_GPU_MEMORY_UTILIZATION 0.5
