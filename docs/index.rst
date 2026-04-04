@@ -110,6 +110,7 @@ verl is fast with:
    perf/verl_profiler_system.md
    perf/nsight_profiling.md
    perf/torch_profiling.md
+   ascend_tutorial/profiling/precision_debugger.md
 
 .. toctree::
    :maxdepth: 1
@@ -140,6 +141,7 @@ verl is fast with:
    data/transfer_queue.md
    advance/grafana_prometheus.md
    advance/fp8.md
+   advance/nvfp4_qat.md
    advance/async-on-policy-distill
    advance/mtp.md
 
@@ -185,6 +187,12 @@ verl is fast with:
    :caption: FAQ
 
    faq/faq
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Contributing
+
+   contributing/editing-agent-instructions.md
 
 .. toctree::
    :maxdepth: 1
