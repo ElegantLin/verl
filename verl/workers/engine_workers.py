@@ -659,6 +659,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             return
 
         set_expandable_segments(False)
+        # Free PyTorch's cached GPU memory so CuMemAllocator can reclaim it
+        # for vLLM weight resume (critical on tight-memory GPUs like 24GB).
+        aggressive_empty_cache(force_sync=True)
         log_gpu_memory_usage("Before resume weights", logger=logger)
 
         # 1. resume rollout memory (weights were released during sleep)

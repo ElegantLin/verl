@@ -216,9 +216,17 @@ class vLLMHttpServer:
 
         logger.info(f"enable_sleep_mode: {self.config.enable_sleep_mode}")
         if not self.config.enable_sleep_mode:
-            from verl.utils.device import set_expandable_segments
+            # NOTE: vLLM >= 0.8 uses CuMemAllocator memory pools which are
+            # incompatible with expandable_segments.  Only enable expandable
+            # segments for older vLLM versions that don't have this allocator.
+            try:
+                from vllm.device_allocator.cumem import CuMemAllocator  # noqa: F401
 
-            set_expandable_segments(True)
+                logger.info("vLLM CuMemAllocator detected — skipping expandable_segments to avoid conflict")
+            except ImportError:
+                from verl.utils.device import set_expandable_segments
+
+                set_expandable_segments(True)
 
         quantization, hf_overrides = self._apply_quantization()
 
