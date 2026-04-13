@@ -18,7 +18,7 @@ An external judge model compares model outputs against ground-truth answers
 without re-solving.
 
 Usage:
-  python examples/shared/eval_llm_judge.py \
+  python examples/hybrid_reward/eval_llm_judge.py \
       --input_parquet /path/to/generated_responses.parquet \
       --judge_model gpt-oss \
       --base_url https://ellm.nrp-nautilus.io/v1 \

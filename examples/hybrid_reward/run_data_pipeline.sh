@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Shared data preprocessing pipeline for HERO and EIF.
+# Data preprocessing pipeline for hybrid reward training (HERO / EIF).
 #
-# Runs stages 1-6 that are identical for both algorithms:
+# Runs stages 1-6:
 #   1. Build prompt-only OpenMathReasoning source parquet
 #   2. Generate candidate responses with the base model (GPU)
 #   3. Build RL train/val splits from generated responses
@@ -9,14 +9,10 @@
 #   5. Build evaluation benchmark parquet files
 #   6. Optionally run cold-start SFT (GPU)
 #
-# Output artifacts can be reused by both Hero and EIF training, avoiding
-# redundant GPU work on candidate generation and SFT.
-#
 # Usage:
-#   bash examples/shared/run_data_pipeline.sh
+#   bash examples/hybrid_reward/run_data_pipeline.sh
 #
-# Configure via RL_PIPELINE_* environment variables (see common.sh).
-# Hero/EIF wrappers translate HERO_*/EIF_* to RL_PIPELINE_* before calling.
+# Configure via RL_PIPELINE_* environment variables (see step_by_step/common.sh).
 
 set -euo pipefail
 set -x
@@ -233,7 +229,7 @@ if [[ "$enable_cold_start_sft" == "1" ]]; then
     RL_PIPELINE_SFT_OUTPUT_DIR="$sft_output_dir" \
     RL_PIPELINE_MODEL_PATH="$base_model_path" \
     RL_PIPELINE_TRUST_REMOTE_CODE="$trust_remote_code" \
-    bash examples/shared/run_cold_start_sft.sh
+    bash examples/hybrid_reward/run_cold_start_sft.sh
     train_model_path=$(resolve_latest_hf_dir "$sft_output_dir" "/huggingface")
 fi
 

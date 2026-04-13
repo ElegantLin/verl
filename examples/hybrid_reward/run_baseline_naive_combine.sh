@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Verifier-only GRPO baseline for the HERO paper.
-# Default verifier matches the paper's main baseline: math_verify (library).
-# Set HERO_VERIFIER_REWARD_FN_NAME=compute_score_math_reward to use the stricter legacy checker.
+# Naive rule-plus-RM combination baseline (HERO paper appendix).
+# The rule-side score comes from the configured verifier reward function and the
+# dense side comes from AceMath-7B-RM. The final reward is a direct linear mix.
 
 set -euo pipefail
 set -x
@@ -32,6 +32,7 @@ esac
 model_path=${HERO_MODEL_PATH:-Qwen/Qwen3-4B-Base}
 trust_remote_code=${HERO_TRUST_REMOTE_CODE:-True}
 verifier_reward_fn_name=${HERO_VERIFIER_REWARD_FN_NAME:-compute_score_math_verify}
+combine_alpha=${HERO_COMBINE_ALPHA:-0.5}
 
 gpus_per_node=${HERO_GPUS_PER_NODE:-4}
 nnodes=${HERO_NNODES:-8}
@@ -51,10 +52,18 @@ rollout_log_prob_micro_batch_size=${HERO_ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_G
 ref_log_prob_micro_batch_size=${HERO_REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-2}
 rollout_max_num_seqs=${HERO_ROLLOUT_MAX_NUM_SEQS:-128}
 
+dense_rm_model=${HERO_DENSE_RM_MODEL:-nvidia/AceMath-7B-RM}
+rm_enable_resource_pool=${HERO_RM_ENABLE_RESOURCE_POOL:-False}
+rm_gpus=${HERO_RM_GPUS_PER_NODE:-$gpus_per_node}
+rm_nodes=${HERO_RM_NNODES:-1}
+rm_tp_size=${HERO_RM_TP_SIZE:-2}
+rm_gpu_memory_utilization=${HERO_RM_GPU_MEMORY_UTILIZATION:-0.5}
+rm_max_num_seqs=${HERO_RM_MAX_NUM_SEQS:-128}
+
 total_epochs=${HERO_TOTAL_EPOCHS:-20}
 save_freq=${HERO_SAVE_FREQ:-20}
 test_freq=${HERO_TEST_FREQ:-5}
-experiment_name=${HERO_EXPERIMENT_NAME:-hero_verifier_only_${regime}_$(date +%Y%m%d_%H%M%S)}
+experiment_name=${HERO_EXPERIMENT_NAME:-hero_naive_combine_${regime}_$(date +%Y%m%d_%H%M%S)}
 loggers=${HERO_LOGGERS:-'["console"]'}
 train_output_dir=${HERO_TRAIN_OUTPUT_DIR:-checkpoints/hero_paper_reproduction/${experiment_name}}
 checkpoint_save_contents=${HERO_CHECKPOINT_SAVE_CONTENTS:-"['model','optimizer','extra','hf_model']"}
@@ -119,10 +128,21 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.top_p=0.95 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="$ref_log_prob_micro_batch_size" \
     algorithm.use_kl_in_reward=False \
-    reward.reward_manager.name=naive \
-    reward.reward_model.enable=False \
-    reward.custom_reward_function.path=examples/hero/baseline_reward_fn.py \
+    reward.reward_manager.name=naive_combine \
+    reward.reward_model.enable=True \
+    reward.reward_model.enable_resource_pool="$rm_enable_resource_pool" \
+    reward.reward_model.n_gpus_per_node="$rm_gpus" \
+    reward.reward_model.nnodes="$rm_nodes" \
+    reward.reward_model.model_path="$dense_rm_model" \
+    reward.reward_model.rollout.name=vllm \
+    reward.reward_model.rollout.tensor_model_parallel_size="$rm_tp_size" \
+    reward.reward_model.rollout.gpu_memory_utilization="$rm_gpu_memory_utilization" \
+    reward.reward_model.rollout.max_num_seqs="$rm_max_num_seqs" \
+    reward.reward_model.rollout.prompt_length="$max_prompt_length" \
+    reward.reward_model.rollout.response_length="$max_response_length" \
+    reward.custom_reward_function.path=examples/hybrid_reward/baseline_reward_fn.py \
     reward.custom_reward_function.name="$verifier_reward_fn_name" \
+    reward.reward_kwargs.naive_combine.alpha="$combine_alpha" \
     trainer.critic_warmup=0 \
     trainer.logger="$loggers" \
     trainer.project_name='hero_paper_baselines' \

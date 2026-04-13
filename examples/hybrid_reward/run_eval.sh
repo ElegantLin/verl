@@ -14,10 +14,9 @@
 #   3. Set NAUTILUS_API_KEY for the external judge (hard-to-verify eval only)
 #
 # Usage:
-#   RL_PIPELINE_MODEL_PATH=/path/to/checkpoint bash examples/shared/run_eval.sh
+#   RL_PIPELINE_MODEL_PATH=/path/to/checkpoint bash examples/hybrid_reward/run_eval.sh
 #
 # Configure via RL_PIPELINE_* environment variables.
-# HERO/EIF wrappers translate their prefix before calling this script.
 
 set -euo pipefail
 set -x

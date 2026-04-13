@@ -57,13 +57,13 @@ Use the following helpers:
 
 ## Training And Eval Wrappers
 
-Wrappers added for the paper reproduction path:
-- `examples/hero/run_hero_cold_start_sft.sh`
-- `examples/hero/run_hero_train.sh`
-- `examples/hero/run_hero_eval.sh`
-- `examples/hero/run_hero_pipeline.sh`
+Unified scripts under `examples/hybrid_reward/`:
+- `examples/hybrid_reward/run_cold_start_sft.sh`
+- `examples/hybrid_reward/run_train.sh` (set `ALGORITHM=hero`)
+- `examples/hybrid_reward/run_eval.sh`
+- `examples/hybrid_reward/run_pipeline.sh` (set `ALGORITHM=hero`)
 
-`run_hero_train.sh` now exports Hugging Face checkpoints by default via:
+`run_train.sh` exports Hugging Face checkpoints by default via:
 - `actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model']`
 
 This makes the latest actor checkpoint directly usable by evaluation.
@@ -78,20 +78,20 @@ Paper-aligned evaluation details implemented in this repo:
 
 The first-response selection is handled by:
 - `verl/trainer/main_eval.py`
-- `examples/shared/eval_llm_judge.py`
-- `examples/hero/run_hero_eval.sh`
+- `examples/hybrid_reward/eval_llm_judge.py`
+- `examples/hybrid_reward/run_eval.sh`
 
 ## One-Command Pipeline
 
 End-to-end reproduction from one bash entrypoint:
 
 ```bash
-bash examples/hero/run_hero_pipeline.sh
+ALGORITHM=hero bash examples/hybrid_reward/run_pipeline.sh
 ```
 
 Useful environment variables:
-- `HERO_MODEL_PATH` or `HERO_BASE_MODEL_PATH`
-- `HERO_LOCAL_DATASET_PATH` if OpenMathReasoning is already local
+- `RL_PIPELINE_MODEL_PATH` or `MODEL_PATH`
+- `RL_PIPELINE_LOCAL_DATASET_PATH` if OpenMathReasoning is already local
 - `HERO_HVM_LOCAL_PATH` / `HERO_TBR_LOCAL_PATH` for local hard-to-verify datasets
 - `HERO_FILTER_TBR=1` to enable the optional paper-style TBR filtering stage
 - `HERO_ENABLE_COLD_START_SFT=0` to skip cold-start SFT

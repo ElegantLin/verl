@@ -17,13 +17,13 @@ def test_hero_baseline_scripts_exist_and_wire_expected_reward_paths():
         "run_hero_verifier_only.sh": [
             "reward.reward_manager.name=naive",
             "reward.reward_model.enable=False",
-            "reward.custom_reward_function.path=examples/hero/baseline_reward_fn.py",
+            "reward.custom_reward_function.path=examples/hybrid_reward/baseline_reward_fn.py",
             "compute_score_math_verify",
         ],
         "run_hero_naive_combine.sh": [
             "reward.reward_manager.name=naive_combine",
             "reward.reward_model.enable=True",
-            "reward.custom_reward_function.path=examples/hero/baseline_reward_fn.py",
+            "reward.custom_reward_function.path=examples/hybrid_reward/baseline_reward_fn.py",
             "reward.reward_kwargs.naive_combine.alpha",
         ],
     }

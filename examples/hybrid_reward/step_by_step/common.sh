@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Shared configuration and helper functions for Hero/EIF data preprocessing.
+# Shared configuration and helper functions for hybrid reward pipelines.
 #
-# Both examples/hero/step_by_step/common.sh and examples/eif/step_by_step/common.sh
-# source this file after mapping their algorithm-specific env vars (HERO_*/EIF_*)
-# to the generic RL_PIPELINE_* prefix used here.
+# Provides GPU profiles, directory layout, dataset defaults, and helper
+# functions used by all step-by-step scripts.
 #
-# Usage from an algorithm wrapper:
-#   _map_hero_vars   # or _map_eif_vars
-#   source examples/shared/step_by_step/common.sh
+# Usage:
+#   source examples/hybrid_reward/step_by_step/common.sh
 
 if [[ -n "${_SHARED_STEP_COMMON_SH:-}" ]]; then
     return 0
