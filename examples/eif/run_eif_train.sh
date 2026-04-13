@@ -59,6 +59,7 @@ nnodes=${EIF_NNODES:-8}
 train_batch_size=${EIF_TRAIN_BATCH_SIZE:-512}
 ppo_mini_batch_size=${EIF_PPO_MINI_BATCH_SIZE:-128}
 ppo_micro_batch_size=${EIF_PPO_MICRO_BATCH_SIZE_PER_GPU:-2}
+ppo_max_token_len_per_gpu=${EIF_PPO_MAX_TOKEN_LEN_PER_GPU:-16384}
 max_prompt_length=${EIF_MAX_PROMPT_LENGTH:-1024}
 max_response_length=${EIF_MAX_RESPONSE_LENGTH:-8192}
 
@@ -118,13 +119,28 @@ max_critic_ckpt_to_keep=${EIF_MAX_CRITIC_CKPT_TO_KEEP:-1}
 resume_mode=${EIF_RESUME_MODE:-disable}
 
 # ─── Build val_files list: in-domain val + eval benchmarks ────────────
+debug_mode=${EIF_DEBUG:-}
+skip_benchmarks=${EIF_SKIP_BENCHMARKS:-}
 val_files="['$val_file'"
-for bench in math500 amc minerva olympiad hardverify_math textbook_reasoning; do
-    bench_file="$eval_dir/${bench}.parquet"
+if [[ -n "$debug_mode" ]]; then
+    # Debug mode: only use amc benchmark
+    echo "Debug mode enabled: only using amc benchmark for validation"
+    bench_file="$eval_dir/amc.parquet"
     if [[ -f "$bench_file" ]]; then
         val_files="$val_files,'$bench_file'"
     fi
-done
+else
+    for bench in math500 amc minerva olympiad hardverify_math textbook_reasoning; do
+        if [[ -n "$skip_benchmarks" ]] && echo "$skip_benchmarks" | grep -qw "$bench"; then
+            echo "Skipping benchmark: $bench"
+            continue
+        fi
+        bench_file="$eval_dir/${bench}.parquet"
+        if [[ -f "$bench_file" ]]; then
+            val_files="$val_files,'$bench_file'"
+        fi
+    done
+fi
 val_files="$val_files]"
 
 # ─── Validation ───────────────────────────────────────────────────────
@@ -172,6 +188,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.kl_loss_coef=0.0 \
     actor_rollout_ref.actor.entropy_coeff=0.0 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu="$ppo_max_token_len_per_gpu" \
     actor_rollout_ref.actor.clip_ratio=0.2 \
     actor_rollout_ref.actor.clip_ratio_high=0.28 \
     actor_rollout_ref.actor.checkpoint.save_contents="$checkpoint_save_contents" \

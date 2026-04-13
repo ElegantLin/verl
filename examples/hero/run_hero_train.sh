@@ -72,6 +72,7 @@ rollout_temperature=${HERO_ROLLOUT_TEMPERATURE:-1.0}
 rollout_log_prob_micro_batch_size=${HERO_ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-2}
 ref_log_prob_micro_batch_size=${HERO_REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-2}
 rollout_max_num_seqs=${HERO_ROLLOUT_MAX_NUM_SEQS:-128}
+rollout_max_num_batched_tokens=${HERO_ROLLOUT_MAX_NUM_BATCHED_TOKENS:-$((max_prompt_length + max_response_length))}
 
 dense_rm_model=${HERO_DENSE_RM_MODEL:-nvidia/AceMath-7B-RM}
 rm_enable_resource_pool=${HERO_RM_ENABLE_RESOURCE_POOL:-False}
@@ -80,6 +81,9 @@ rm_nodes=${HERO_RM_NNODES:-1}
 rm_tp_size=${HERO_RM_TP_SIZE:-2}
 rm_gpu_memory_utilization=${HERO_RM_GPU_MEMORY_UTILIZATION:-0.5}
 rm_max_num_seqs=${HERO_RM_MAX_NUM_SEQS:-128}
+rm_prompt_length=${HERO_RM_PROMPT_LENGTH:-$max_prompt_length}
+rm_response_length=${HERO_RM_RESPONSE_LENGTH:-$max_response_length}
+rm_max_num_batched_tokens=${HERO_RM_MAX_NUM_BATCHED_TOKENS:-$((rm_prompt_length + rm_response_length))}
 
 hero_w_min=${HERO_W_MIN:-0.4}
 hero_w_max=${HERO_W_MAX:-3.0}
@@ -136,4 +140,71 @@ fi
 mkdir -p "$train_output_dir"
 echo "Training output dir: $train_output_dir"
 
-python3 -m verl.trainer.main_ppo     algorithm.adv_estimator=grpo     data.train_files="['$train_file']"     data.val_files="$val_files"     data.train_batch_size="$train_batch_size"     data.max_prompt_length="$max_prompt_length"     data.max_response_length="$max_response_length"     data.filter_overlong_prompts=True     data.truncation='error'     actor_rollout_ref.model.path="$model_path"     actor_rollout_ref.model.trust_remote_code="$trust_remote_code"     actor_rollout_ref.actor.optim.lr=1e-6     actor_rollout_ref.model.use_remove_padding=True     actor_rollout_ref.model.enable_gradient_checkpointing=True     actor_rollout_ref.actor.ppo_mini_batch_size="$ppo_mini_batch_size"     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$ppo_micro_batch_size"     actor_rollout_ref.actor.use_kl_loss=False     actor_rollout_ref.actor.kl_loss_coef=0.0     actor_rollout_ref.actor.entropy_coeff=0.0     actor_rollout_ref.actor.use_dynamic_bsz=True     actor_rollout_ref.actor.ppo_max_token_len_per_gpu="$ppo_max_token_len_per_gpu"     actor_rollout_ref.actor.clip_ratio=0.2     actor_rollout_ref.actor.clip_ratio_high=0.28     actor_rollout_ref.actor.checkpoint.save_contents="$checkpoint_save_contents"     actor_rollout_ref.rollout.name=vllm     actor_rollout_ref.rollout.gpu_memory_utilization="$rollout_gpu_memory_utilization"     actor_rollout_ref.rollout.max_num_seqs="$rollout_max_num_seqs"     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="$rollout_log_prob_micro_batch_size"     actor_rollout_ref.rollout.tensor_model_parallel_size="$rollout_tp_size"     actor_rollout_ref.rollout.n="$rollout_n"     actor_rollout_ref.rollout.temperature="$rollout_temperature"     actor_rollout_ref.rollout.top_p=0.95     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="$ref_log_prob_micro_batch_size"     algorithm.use_kl_in_reward=False     reward.reward_manager.name=hero     reward.reward_model.enable=True     reward.reward_model.enable_resource_pool="$rm_enable_resource_pool"     reward.reward_model.n_gpus_per_node="$rm_gpus"     reward.reward_model.nnodes="$rm_nodes"     reward.reward_model.model_path="$dense_rm_model"     reward.reward_model.rollout.name=vllm     reward.reward_model.rollout.tensor_model_parallel_size="$rm_tp_size"     reward.reward_model.rollout.gpu_memory_utilization="$rm_gpu_memory_utilization"     reward.reward_model.rollout.max_num_seqs="$rm_max_num_seqs"     reward.reward_model.rollout.prompt_length="$max_prompt_length"     reward.reward_model.rollout.response_length="$max_response_length"     reward.reward_kwargs.hero.alpha="$hero_alpha"     reward.reward_kwargs.hero.beta="$hero_beta"     reward.reward_kwargs.hero.w_min="$hero_w_min"     reward.reward_kwargs.hero.w_max="$hero_w_max"     reward.reward_kwargs.hero.k="$hero_k"     reward.reward_kwargs.hero.sigma_ema="$hero_sigma_ema"     trainer.critic_warmup=0     trainer.logger="$loggers"     trainer.project_name='hero_paper_reproduction'     trainer.experiment_name="$experiment_name"     trainer.nnodes="$nnodes"     trainer.n_gpus_per_node="$gpus_per_node"     trainer.save_freq="$save_freq"     trainer.test_freq="$test_freq"     trainer.total_epochs="$total_epochs"     trainer.resume_mode="$resume_mode"     trainer.default_local_dir="$train_output_dir"     trainer.max_actor_ckpt_to_keep="$max_actor_ckpt_to_keep"     trainer.max_critic_ckpt_to_keep="$max_critic_ckpt_to_keep"     "$@"
+python3 -m verl.trainer.main_ppo \
+    algorithm.adv_estimator=grpo \
+    data.train_files="['$train_file']" \
+    data.val_files="$val_files" \
+    data.train_batch_size="$train_batch_size" \
+    data.max_prompt_length="$max_prompt_length" \
+    data.max_response_length="$max_response_length" \
+    data.filter_overlong_prompts=True \
+    data.truncation='error' \
+    actor_rollout_ref.model.path="$model_path" \
+    actor_rollout_ref.model.trust_remote_code="$trust_remote_code" \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.actor.ppo_mini_batch_size="$ppo_mini_batch_size" \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu="$ppo_micro_batch_size" \
+    actor_rollout_ref.actor.use_kl_loss=False \
+    actor_rollout_ref.actor.kl_loss_coef=0.0 \
+    actor_rollout_ref.actor.entropy_coeff=0.0 \
+    actor_rollout_ref.actor.use_dynamic_bsz=True \
+    actor_rollout_ref.actor.ppo_max_token_len_per_gpu="$ppo_max_token_len_per_gpu" \
+    actor_rollout_ref.actor.clip_ratio=0.2 \
+    actor_rollout_ref.actor.clip_ratio_high=0.28 \
+    actor_rollout_ref.actor.checkpoint.save_contents="$checkpoint_save_contents" \
+    actor_rollout_ref.rollout.name=vllm \
+    actor_rollout_ref.rollout.gpu_memory_utilization="$rollout_gpu_memory_utilization" \
+    actor_rollout_ref.rollout.max_num_seqs="$rollout_max_num_seqs" \
+    actor_rollout_ref.rollout.max_num_batched_tokens="$rollout_max_num_batched_tokens" \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu="$rollout_log_prob_micro_batch_size" \
+    actor_rollout_ref.rollout.tensor_model_parallel_size="$rollout_tp_size" \
+    actor_rollout_ref.rollout.n="$rollout_n" \
+    actor_rollout_ref.rollout.temperature="$rollout_temperature" \
+    actor_rollout_ref.rollout.top_p=0.95 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu="$ref_log_prob_micro_batch_size" \
+    algorithm.use_kl_in_reward=False \
+    reward.reward_manager.name=hero \
+    reward.reward_model.enable=True \
+    reward.reward_model.enable_resource_pool="$rm_enable_resource_pool" \
+    reward.reward_model.n_gpus_per_node="$rm_gpus" \
+    reward.reward_model.nnodes="$rm_nodes" \
+    reward.reward_model.model_path="$dense_rm_model" \
+    reward.reward_model.rollout.name=vllm \
+    reward.reward_model.rollout.tensor_model_parallel_size="$rm_tp_size" \
+    reward.reward_model.rollout.gpu_memory_utilization="$rm_gpu_memory_utilization" \
+    reward.reward_model.rollout.max_num_seqs="$rm_max_num_seqs" \
+    reward.reward_model.rollout.max_num_batched_tokens="$rm_max_num_batched_tokens" \
+    reward.reward_model.rollout.prompt_length="$rm_prompt_length" \
+    reward.reward_model.rollout.response_length="$rm_response_length" \
+    reward.reward_kwargs.hero.alpha="$hero_alpha" \
+    reward.reward_kwargs.hero.beta="$hero_beta" \
+    reward.reward_kwargs.hero.w_min="$hero_w_min" \
+    reward.reward_kwargs.hero.w_max="$hero_w_max" \
+    reward.reward_kwargs.hero.k="$hero_k" \
+    reward.reward_kwargs.hero.sigma_ema="$hero_sigma_ema" \
+    trainer.critic_warmup=0 \
+    trainer.logger="$loggers" \
+    trainer.project_name='hero_paper_reproduction' \
+    trainer.experiment_name="$experiment_name" \
+    trainer.nnodes="$nnodes" \
+    trainer.n_gpus_per_node="$gpus_per_node" \
+    trainer.save_freq="$save_freq" \
+    trainer.test_freq="$test_freq" \
+    trainer.total_epochs="$total_epochs" \
+    trainer.resume_mode="$resume_mode" \
+    trainer.default_local_dir="$train_output_dir" \
+    trainer.max_actor_ckpt_to_keep="$max_actor_ckpt_to_keep" \
+    trainer.max_critic_ckpt_to_keep="$max_critic_ckpt_to_keep" \
+    "$@"
