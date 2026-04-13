@@ -78,7 +78,7 @@ Paper-aligned evaluation details implemented in this repo:
 
 The first-response selection is handled by:
 - `verl/trainer/main_eval.py`
-- `examples/hero/eval_hero_llm_judge.py`
+- `examples/shared/eval_llm_judge.py`
 - `examples/hero/run_hero_eval.sh`
 
 ## One-Command Pipeline

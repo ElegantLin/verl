@@ -77,7 +77,7 @@ def default_compute_score(
     ]:
         # HERO paper hard-to-verify benchmarks.  During training these are scored
         # with math_verify as a best-effort verifier; definitive evaluation uses
-        # GPT-4o as an LLM-as-judge (see examples/hero/eval_hero_llm_judge.py).
+        # GPT-4o as an LLM-as-judge (see examples/shared/eval_llm_judge.py).
         try:
             from . import math_verify
 
