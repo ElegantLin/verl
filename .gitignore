@@ -132,6 +132,7 @@ outputs
 .history
 
 # Local scratch files
+.worktrees/
 *.pdf
 *.whl
 *.whl.*
