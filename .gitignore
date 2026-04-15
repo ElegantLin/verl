@@ -144,4 +144,5 @@ outputs
 !CLAUDE.md
 *.bak
 run.sh
+!examples/hybrid_reward/run.sh
 preprocess.sh

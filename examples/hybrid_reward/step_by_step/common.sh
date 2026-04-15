@@ -165,8 +165,15 @@ data_dir=${RL_PIPELINE_DATA_DIR:-$work_dir/openmathreasoning_hero}
 eval_dir=${RL_PIPELINE_EVAL_DIR:-$work_dir/hero_eval}
 sft_data_dir=${RL_PIPELINE_SFT_DATA_DIR:-$work_dir/openmathreasoning_hero_sft}
 sft_output_dir=${RL_PIPELINE_SFT_OUTPUT_DIR:-$work_dir/checkpoints/cold_start_sft}
-train_output_dir=${RL_PIPELINE_TRAIN_OUTPUT_DIR:-$work_dir/checkpoints/rl}
-eval_output_dir=${RL_PIPELINE_EVAL_OUTPUT_DIR:-$work_dir/eval_results}
+algorithm_name=${ALGORITHM:-}
+default_train_output_dir=$work_dir/checkpoints/rl
+default_eval_output_dir=$work_dir/eval_results
+if [[ -n "$algorithm_name" ]]; then
+    default_train_output_dir=$work_dir/checkpoints/${algorithm_name}_rl
+    default_eval_output_dir=$work_dir/eval_results/${algorithm_name}
+fi
+train_output_dir=${RL_PIPELINE_TRAIN_OUTPUT_DIR:-$default_train_output_dir}
+eval_output_dir=${RL_PIPELINE_EVAL_OUTPUT_DIR:-$default_eval_output_dir}
 source_prompts_path=${RL_PIPELINE_SOURCE_PROMPTS_PATH:-$source_dir/source_prompts.parquet}
 source_generated_path=${RL_PIPELINE_SOURCE_GENERATED_PATH:-$source_dir/source_generated.parquet}
 filtered_tbr_path=${RL_PIPELINE_FILTERED_TBR_PATH:-$eval_dir/textbook_reasoning_filtered.parquet}

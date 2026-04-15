@@ -57,11 +57,22 @@ Use the following helpers:
 
 ## Training And Eval Wrappers
 
-Unified scripts under `examples/hybrid_reward/`:
-- `examples/hybrid_reward/run_cold_start_sft.sh`
-- `examples/hybrid_reward/run_train.sh` (set `ALGORITHM=hero`)
-- `examples/hybrid_reward/run_eval.sh`
-- `examples/hybrid_reward/run_pipeline.sh` (set `ALGORITHM=hero`)
+Canonical CLI:
+- `examples/hybrid_reward/run.sh`
+
+Semantic commands for HERO:
+- `bash examples/hybrid_reward/run.sh data-train`
+- `bash examples/hybrid_reward/run.sh data-eval`
+- `bash examples/hybrid_reward/run.sh sft`
+- `bash examples/hybrid_reward/run.sh rl --algorithm hero`
+- `bash examples/hybrid_reward/run.sh eval --algorithm hero`
+- `bash examples/hybrid_reward/run.sh pipeline --algorithm hero`
+
+Advanced/internal backends remain under `examples/hybrid_reward/`:
+- `run_cold_start_sft.sh`
+- `run_train.sh`
+- `run_eval.sh`
+- `run_pipeline.sh`
 
 `run_train.sh` exports Hugging Face checkpoints by default via:
 - `actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model']`
@@ -86,16 +97,16 @@ The first-response selection is handled by:
 End-to-end reproduction from one bash entrypoint:
 
 ```bash
-ALGORITHM=hero bash examples/hybrid_reward/run_pipeline.sh
+bash examples/hybrid_reward/run.sh pipeline --algorithm hero
 ```
 
 Useful environment variables:
-- `RL_PIPELINE_MODEL_PATH` or `MODEL_PATH`
+- `RL_PIPELINE_MODEL_PATH`
 - `RL_PIPELINE_LOCAL_DATASET_PATH` if OpenMathReasoning is already local
-- `HERO_HVM_LOCAL_PATH` / `HERO_TBR_LOCAL_PATH` for local hard-to-verify datasets
-- `HERO_FILTER_TBR=1` to enable the optional paper-style TBR filtering stage
-- `HERO_ENABLE_COLD_START_SFT=0` to skip cold-start SFT
-- `HERO_TRAIN_OUTPUT_DIR`, `HERO_SFT_OUTPUT_DIR`, `HERO_EVAL_OUTPUT_DIR` to control artifact locations
+- `RL_PIPELINE_HVM_LOCAL_PATH` / `RL_PIPELINE_TBR_LOCAL_PATH` for local hard-to-verify datasets
+- `--filter-tbr` on `data-eval` to enable the optional paper-style TBR filtering stage
+- `--no-sft` on `pipeline` to skip cold-start SFT
+- `RL_PIPELINE_TRAIN_OUTPUT_DIR`, `RL_PIPELINE_SFT_OUTPUT_DIR`, `RL_PIPELINE_EVAL_OUTPUT_DIR` to control artifact locations
 
 ## Output Diagnostics
 

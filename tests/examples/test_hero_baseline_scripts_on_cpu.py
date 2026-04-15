@@ -1,10 +1,14 @@
 from pathlib import Path
 
+import pytest
+
+
+hydra = pytest.importorskip("hydra")
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 
 
-EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples" / "hero"
+EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples" / "hybrid_reward"
 
 
 def test_hero_baseline_scripts_exist_and_wire_expected_reward_paths():
@@ -40,21 +44,22 @@ def test_hero_baseline_scripts_exist_and_wire_expected_reward_paths():
 STEP_BY_STEP_DIR = EXAMPLES_DIR / "step_by_step"
 
 
-def test_hero_step1_source_prompt_script_uses_raw_openmathreasoning_defaults():
+def test_semantic_step_by_step_scripts_replace_numbered_stages():
     common_text = (STEP_BY_STEP_DIR / "common.sh").read_text()
-    stage1_text = (STEP_BY_STEP_DIR / "01_build_source_prompts.sh").read_text()
-    stage3_text = (STEP_BY_STEP_DIR / "03_build_rl_data.sh").read_text()
+    data_train_text = (STEP_BY_STEP_DIR / "data-train.sh").read_text()
+    data_eval_text = (STEP_BY_STEP_DIR / "data-eval.sh").read_text()
+    sft_text = (STEP_BY_STEP_DIR / "sft.sh").read_text()
+    rl_text = (STEP_BY_STEP_DIR / "rl.sh").read_text()
+    eval_text = (STEP_BY_STEP_DIR / "eval.sh").read_text()
 
-    assert "dataset_name=${HERO_DATASET:-nvidia/OpenMathReasoning}" in common_text
-    assert "dataset_split=${HERO_DATASET_SPLIT:-cot}" in common_text
-    assert "source_question_col=${HERO_SOURCE_QUESTION_COL:-problem}" in common_text
-    assert "source_answer_col=${HERO_SOURCE_ANSWER_COL:-expected_answer}" in common_text
-    assert "source_dataset_trust_remote_code=${HERO_SOURCE_DATASET_TRUST_REMOTE_CODE:-False}" in common_text
-    assert '--question_col "$source_question_col"' in stage1_text
-    assert '--answer_col "$source_answer_col"' in stage1_text
-    assert '[[ "$source_dataset_trust_remote_code" == "True" ]]' in stage1_text
-    assert '--question_col "$question_col"' in stage3_text
-    assert '--answer_col "$answer_col"' in stage3_text
+    assert "dataset_name=${RL_PIPELINE_DATASET:-nvidia/OpenMathReasoning}" in common_text
+    assert 'run_stage_data_train "$@"' in data_train_text
+    assert 'run_stage_data_eval "$@"' in data_eval_text
+    assert 'run_stage_sft "$@"' in sft_text
+    assert 'run_stage_rl "$@"' in rl_text
+    assert 'run_stage_eval "$@"' in eval_text
+    assert not (STEP_BY_STEP_DIR / "01_build_source_prompts.sh").exists()
+    assert not (STEP_BY_STEP_DIR / "08_run_final_eval.sh").exists()
 
 
 
@@ -77,9 +82,9 @@ def test_generation_server_config_accepts_output_path_override_for_step2_scripts
 
 
 def test_cold_start_sft_script_falls_back_when_flash_attn_is_unavailable():
-    text = (EXAMPLES_DIR / "run_hero_cold_start_sft.sh").read_text()
+    text = (EXAMPLES_DIR / "run_cold_start_sft.sh").read_text()
 
-    assert "HERO_SFT_ATTN_IMPLEMENTATION" in text
+    assert "RL_PIPELINE_SFT_ATTN_IMPLEMENTATION" in text
     assert 'python3 -c "import flash_attn"' in text
     assert 'falling back to "sdpa"' in text
     assert '+model.override_config.attn_implementation="$attn_implementation"' in text

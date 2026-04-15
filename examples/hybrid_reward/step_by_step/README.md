@@ -1,29 +1,34 @@
-# Hybrid Reward Step-by-Step Scripts
+# Hybrid Reward Semantic Stage Scripts
 
-These scripts split the HERO/EIF pipeline into ordered stages you can run
-one by one. Set `ALGORITHM=hero` (default) or `ALGORITHM=eif` to select the
-reward strategy for training (stage 7).
+These scripts expose the same workflow as `examples/hybrid_reward/run.sh`, but
+as direct stage entrypoints when you want to run the pipeline manually.
 
-Stages 1-6 (data preprocessing) are identical for both algorithms and only
-need to run once.
+Available stages:
 
-## One-command pipeline
+- `data-train.sh`
+- `data-eval.sh`
+- `sft.sh`
+- `rl.sh`
+- `eval.sh`
+
+## Recommended Interface
+
+For most usage, prefer:
 
 ```bash
-ALGORITHM=hero bash examples/hybrid_reward/run_pipeline.sh
-ALGORITHM=eif  bash examples/hybrid_reward/run_pipeline.sh
+bash examples/hybrid_reward/run.sh pipeline --algorithm hero
+bash examples/hybrid_reward/run.sh pipeline --algorithm eif
 ```
 
-## Step-by-step
+## Stage-by-Stage Usage
 
 Setup:
 
 ```bash
 export RL_PIPELINE_RUN_NAME=my_run
 export RL_PIPELINE_GPU_PROFILE=8x24gb   # or 4x80gb or 2x80gb
-export RL_PIPELINE_MODEL_PATH=Qwen/Qwen3-4B-Base
 
-# For EIF: set tau/m LLM endpoint credentials
+# For EIF: set tau/m endpoint credentials
 # export NAUTILUS_API_KEY=<your-key>
 
 # If you already have OpenMathReasoning locally:
@@ -33,78 +38,65 @@ export RL_PIPELINE_MODEL_PATH=Qwen/Qwen3-4B-Base
 Run in order:
 
 ```bash
-bash examples/hybrid_reward/step_by_step/01_build_source_prompts.sh
-bash examples/hybrid_reward/step_by_step/02_generate_source_candidates.sh
-bash examples/hybrid_reward/step_by_step/03_build_rl_data.sh
-bash examples/hybrid_reward/step_by_step/05_build_eval_benchmarks.sh
-ALGORITHM=hero bash examples/hybrid_reward/step_by_step/07_run_rl_train.sh
-bash examples/hybrid_reward/step_by_step/08_run_final_eval.sh
+bash examples/hybrid_reward/step_by_step/data-train.sh
+bash examples/hybrid_reward/step_by_step/data-eval.sh
+bash examples/hybrid_reward/step_by_step/sft.sh
+bash examples/hybrid_reward/step_by_step/rl.sh --algorithm hero
+bash examples/hybrid_reward/step_by_step/eval.sh --algorithm hero
 ```
 
-Optional stages:
+To run EIF instead:
 
 ```bash
-bash examples/hybrid_reward/step_by_step/04_optional_filter_tbr.sh
-bash examples/hybrid_reward/step_by_step/06_optional_cold_start_sft.sh
+bash examples/hybrid_reward/step_by_step/rl.sh --algorithm eif
+bash examples/hybrid_reward/step_by_step/eval.sh --algorithm eif
 ```
 
-## Running Both HERO and EIF
-
-Since stages 1-6 are shared, preprocess once then train both:
+## Shared Preprocess, Separate RL
 
 ```bash
-# 1. Run stages 1-6 (only once)
-bash examples/hybrid_reward/step_by_step/01_build_source_prompts.sh
-bash examples/hybrid_reward/step_by_step/02_generate_source_candidates.sh
-bash examples/hybrid_reward/step_by_step/03_build_rl_data.sh
-bash examples/hybrid_reward/step_by_step/05_build_eval_benchmarks.sh
-bash examples/hybrid_reward/step_by_step/06_optional_cold_start_sft.sh
+# Shared stages
+bash examples/hybrid_reward/step_by_step/data-train.sh
+bash examples/hybrid_reward/step_by_step/data-eval.sh
+bash examples/hybrid_reward/step_by_step/sft.sh
 
-# 2. Train HERO
-ALGORITHM=hero bash examples/hybrid_reward/step_by_step/07_run_rl_train.sh
+# HERO
+bash examples/hybrid_reward/step_by_step/rl.sh --algorithm hero
 
-# 3. Train EIF (can run in parallel on a different node)
-ALGORITHM=eif bash examples/hybrid_reward/step_by_step/07_run_rl_train.sh
+# EIF
+export NAUTILUS_API_KEY=<your-key>
+bash examples/hybrid_reward/step_by_step/rl.sh --algorithm eif
 ```
 
-## Speeding Up Stage 2
-
-Stage 2 (candidate generation) is the slowest preprocessing step because
-it runs vLLM inference over up to 40k source prompts.
-
-For a quick smoke test:
+## Debug Shortcuts
 
 ```bash
-export RL_PIPELINE_SOURCE_SAMPLE_SIZE=1000
-export RL_PIPELINE_MAX_RESPONSE_LENGTH=1024
+# Smaller source sample and shorter responses
+bash examples/hybrid_reward/step_by_step/data-train.sh --debug
+
+# Build only amc
+bash examples/hybrid_reward/step_by_step/data-eval.sh --debug
 ```
 
-For better throughput on `Qwen/Qwen3-4B-Base`:
+## Optional TBR Filtering
 
 ```bash
-RL_PIPELINE_SOURCE_SAMPLE_SIZE=5000 \
-RL_PIPELINE_MAX_RESPONSE_LENGTH=1024 \
-RL_PIPELINE_GEN_TP_SIZE=1 \
-RL_PIPELINE_GEN_GPU_MEMORY_UTILIZATION=0.9 \
-bash examples/hybrid_reward/step_by_step/02_generate_source_candidates.sh \
-  actor_rollout_ref.rollout.max_model_len=3072 \
-  actor_rollout_ref.rollout.max_num_seqs=256 \
-  actor_rollout_ref.rollout.max_num_batched_tokens=16384
+bash examples/hybrid_reward/step_by_step/data-eval.sh --filter-tbr
 ```
 
 ## GPU Profile Presets
 
 | Profile | Description |
-|---|---|
+| --- | --- |
 | `RL_PIPELINE_GPU_PROFILE=8x24gb` | Conservative defaults for 8 x 24GB GPUs |
 | `RL_PIPELINE_GPU_PROFILE=4x80gb` | Larger defaults for 4 x 80GB GPUs |
 | `RL_PIPELINE_GPU_PROFILE=2x80gb` | Minimal defaults for 2 x 80GB GPUs |
 
 ## Notes
 
-- Set `DEBUG=1` to use only the `amc` benchmark for validation during
-  RL training (faster iteration).
-- EIF training requires tau/m LLM endpoints. Configure with `EIF_TAU_MODEL`,
-  `EIF_TAU_BASE_URL`, `EIF_M_MODEL`, `EIF_M_BASE_URL`.
-- Set `NAUTILUS_API_KEY` before `08_run_final_eval.sh` if you evaluate
-  `hardverify_math` or `textbook_reasoning` (requires LLM judge).
+- EIF training requires tau/m LLM endpoints. Configure them with the existing
+  `EIF_*` environment variables consumed by `run_train.sh`.
+- Use `--model-path` with `eval.sh` if you want to evaluate an explicit
+  checkpoint instead of the latest actor for the selected algorithm.
+- `hardverify_math` and `textbook_reasoning` still require LLM-as-judge
+  credentials during evaluation.
