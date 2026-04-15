@@ -1,6 +1,6 @@
 # Hybrid Reward EIF Estimator
 
-Last updated: 03/11/2026.
+Last updated: 04/15/2026.
 
 This page documents an implementation of the one-step EIF estimator from:
 - *Hybrid Reward* (Feb 28, 2026)
@@ -45,6 +45,35 @@ AceMath-7B scoring reuses the same discriminative RM request format used by HERO
 
 The helper / preprocessing entrypoint is:
 - `examples/data_preprocess/hybrid_reward_eif_eval.py`
+
+## Data Preparation
+
+EIF now uses the same unified bash orchestration layer as HERO for shared stages:
+- source prompt construction
+- candidate generation
+- RL train/val parquet building
+- eval benchmark building
+- optional cold-start SFT
+
+Canonical shared entrypoint:
+- `examples/hybrid_reward/run.sh`
+
+Semantic commands for EIF:
+- `bash examples/hybrid_reward/run.sh data-train`
+- `bash examples/hybrid_reward/run.sh data-eval`
+- `bash examples/hybrid_reward/run.sh sft`
+- `bash examples/hybrid_reward/run.sh rl --algorithm eif`
+- `bash examples/hybrid_reward/run.sh eval --algorithm eif`
+- `bash examples/hybrid_reward/run.sh pipeline --algorithm eif`
+
+`data-train`, `data-eval`, and `sft` are shared with HERO. Only the `rl` stage is
+algorithm-specific.
+
+Useful shared options:
+- `bash examples/hybrid_reward/run.sh data-train --debug`
+- `bash examples/hybrid_reward/run.sh data-eval --debug`
+- `bash examples/hybrid_reward/run.sh data-eval --filter-tbr`
+- `bash examples/hybrid_reward/run.sh pipeline --algorithm eif --no-sft`
 
 ## Offline Evaluation Integration
 
@@ -100,6 +129,26 @@ Logged reward diagnostics include:
 - `hybrid_eif_m`
 - `hybrid_eif_final_score`
 
+## Training And Eval Wrappers
+
+Canonical CLI:
+- `examples/hybrid_reward/run.sh`
+
+Advanced/internal backends remain under `examples/hybrid_reward/`:
+- `run_data_pipeline.sh`
+- `run_cold_start_sft.sh`
+- `run_train.sh`
+- `run_eval.sh`
+- `run_pipeline.sh`
+
+EIF training requires tau/m endpoint configuration via the existing `EIF_*`
+environment variables consumed by `run_train.sh`.
+
+`run_train.sh` exports Hugging Face checkpoints by default via:
+- `actor_rollout_ref.actor.checkpoint.save_contents=['model','optimizer','extra','hf_model']`
+
+This makes the latest actor checkpoint directly usable by evaluation.
+
 ## Preprocessing Modes
 
 `examples/data_preprocess/hybrid_reward_eif_eval.py` supports three modes:
@@ -134,3 +183,26 @@ Output metrics include:
 - naive mean
 - one-step EIF mean
 - naive / EIF variance and variance reduction
+
+## One-Command Pipeline
+
+End-to-end execution from the unified bash entrypoint:
+
+```bash
+export NAUTILUS_API_KEY=<your-key>
+bash examples/hybrid_reward/run.sh pipeline --algorithm eif
+```
+
+Useful environment variables:
+- `NAUTILUS_API_KEY`
+- `EIF_*` endpoint variables used by `run_train.sh`
+- `RL_PIPELINE_MODEL_PATH`
+- `RL_PIPELINE_LOCAL_DATASET_PATH` if OpenMathReasoning is already local
+- `RL_PIPELINE_HVM_LOCAL_PATH` / `RL_PIPELINE_TBR_LOCAL_PATH` for local hard-to-verify datasets
+- `RL_PIPELINE_TRAIN_OUTPUT_DIR`, `RL_PIPELINE_SFT_OUTPUT_DIR`, `RL_PIPELINE_EVAL_OUTPUT_DIR` to control artifact locations
+
+To evaluate an explicit checkpoint instead of the latest EIF actor:
+
+```bash
+bash examples/hybrid_reward/run.sh eval --model-path /path/to/checkpoint
+```
