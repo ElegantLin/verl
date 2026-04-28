@@ -157,7 +157,7 @@ case "$gpu_profile" in
 esac
 
 # ── Directory layout ─────────────────────────────────────────────────
-artifact_root=${RL_PIPELINE_ARTIFACT_ROOT:-$HOME/data/rl_data_pipeline}
+artifact_root=${RL_PIPELINE_ARTIFACT_ROOT:-$repo_root/data/rl_data_pipeline}
 run_name=${RL_PIPELINE_RUN_NAME:-step_by_step_run}
 work_dir=${RL_PIPELINE_WORK_DIR:-$artifact_root/$run_name}
 source_dir=${RL_PIPELINE_SOURCE_DIR:-$work_dir/source_generation}
